@@ -1,0 +1,189 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Get a free hosted Postgres database in seconds: `npx create-db`
+
+
+generator client {
+  provider = "prisma-client"
+  output   = "./generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ================================
+// ENUMS
+// ================================
+
+enum DeviceType {
+  CALL_BUTTON
+}
+
+enum DeviceStatus {
+  PENDING
+  ONLINE
+  OFFLINE
+  DISABLED
+}
+
+enum DeviceEventType {
+  BUTTON_PRESSED
+}
+
+enum DeviceEventStatus {
+  RECEIVED
+  PROCESSED
+  FAILED
+}
+
+enum PushPlatform {
+  ANDROID
+  IOS
+  WEB
+}
+
+enum NotificationStatus {
+  PENDING
+  SENT
+  FAILED
+}
+
+// ================================
+// STORE
+// Một cửa hàng có nhiều thiết bị và nhân viên
+// ================================
+
+model Store {
+  id        String   @id @default(cuid())
+  name      String   @db.VarChar(120)
+  slug      String   @unique @db.VarChar(80)
+  timezone  String   @default("Asia/Ho_Chi_Minh") @db.VarChar(60)
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  devices Device[]
+  staff   Staff[]
+
+  @@index([isActive])
+}
+
+// ================================
+// DEVICE
+// Thiết bị ESP32 đã đăng ký
+// ================================
+
+model Device {
+  id               String       @id @default(cuid())
+  deviceKey        String       @unique @db.VarChar(64)
+  deviceSecretHash String       @db.VarChar(255)
+  name             String       @db.VarChar(120)
+  type             DeviceType   @default(CALL_BUTTON)
+  status           DeviceStatus @default(PENDING)
+  firmwareVersion  String?      @db.VarChar(40)
+  lastSeenAt       DateTime?
+  storeId          String
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+
+  store  Store         @relation(fields: [storeId], references: [id], onDelete: Restrict)
+  events DeviceEvent[]
+
+  @@index([storeId, status])
+  @@index([lastSeenAt])
+}
+
+// ================================
+// DEVICE EVENT
+// Lịch sử sự kiện nhận từ ESP32
+// ================================
+
+model DeviceEvent {
+  id              String            @id @default(cuid())
+  eventId         String            @unique @db.Uuid
+  deviceId        String
+  type            DeviceEventType
+  status          DeviceEventStatus @default(RECEIVED)
+  occurredAt      DateTime
+  receivedAt      DateTime          @default(now())
+  processedAt     DateTime?
+  firmwareVersion String?           @db.VarChar(40)
+  rssiDbm         Int?
+  payload         Json?
+
+  device         Device                @relation(fields: [deviceId], references: [id], onDelete: Restrict)
+  notifications DeviceNotification[]
+
+  @@index([deviceId, occurredAt])
+  @@index([status, receivedAt])
+}
+
+// ================================
+// STAFF
+// Nhân viên thuộc một cửa hàng
+// ================================
+
+model Staff {
+  id        String   @id @default(cuid())
+  name      String   @db.VarChar(120)
+  email     String?  @unique @db.VarChar(254)
+  phone     String?  @db.VarChar(20)
+  isActive  Boolean  @default(true)
+  storeId   String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  store      Store            @relation(fields: [storeId], references: [id], onDelete: Restrict)
+  pushTokens StaffPushToken[]
+
+  @@index([storeId, isActive])
+}
+
+// ================================
+// STAFF PUSH TOKEN
+// Token thiết bị nhận thông báo FCM
+// ================================
+
+model StaffPushToken {
+  id         String       @id @default(cuid())
+  token      String       @unique @db.VarChar(2048)
+  platform   PushPlatform
+  isActive   Boolean      @default(true)
+  lastSeenAt DateTime?
+  staffId    String
+  createdAt  DateTime     @default(now())
+  updatedAt  DateTime     @updatedAt
+
+  staff         Staff                 @relation(fields: [staffId], references: [id], onDelete: Restrict)
+  notifications DeviceNotification[]
+
+  @@index([staffId, isActive])
+}
+
+// ================================
+// DEVICE NOTIFICATION
+// Theo dõi việc gửi thông báo cho từng token
+// ================================
+
+model DeviceNotification {
+  id             String             @id @default(cuid())
+  eventId        String
+  pushTokenId    String
+  status         NotificationStatus @default(PENDING)
+  attempts       Int                @default(0)
+  fcmMessageId   String?            @db.VarChar(255)
+  lastError      String?            @db.VarChar(1000)
+  sentAt         DateTime?
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+
+  event     DeviceEvent    @relation(fields: [eventId], references: [id], onDelete: Restrict)
+  pushToken StaffPushToken @relation(fields: [pushTokenId], references: [id], onDelete: Restrict)
+
+  // Một sự kiện không tạo hai bản ghi gửi cho cùng một token
+  @@unique([eventId, pushTokenId])
+  @@index([status, createdAt])
+}
+
