@@ -9,6 +9,18 @@ declare module "fastify" {
   }
 }
 
+console.info("Worker runtime config", {
+  nodeEnv: env.NODE_ENV,
+  databaseUrlPresent: Boolean(env.DATABASE_URL),
+  databaseUrlProtocol: (() => {
+    try {
+      return new URL(env.DATABASE_URL).protocol;
+    } catch {
+      return "invalid-url";
+    }
+  })(),
+});
+
 export function createPrismaClient(): PrismaClient {
   const adapter = new PrismaPg({
     connectionString: env.DATABASE_URL,
