@@ -26,10 +26,14 @@ async function main(): Promise<void> {
   await worker.run();
 }
 
-void main().catch(async (error: unknown) => {
-  void error;
+void main().catch((error: unknown) => {
   process.stderr.write(
-    "Notification worker stopped before entering its run loop\n",
+    "Notification worker startup failed: " +
+      (error instanceof Error
+        ? (error.stack ?? error.message)
+        : String(error)) +
+      "\n",
   );
+
   process.exitCode = 1;
 });

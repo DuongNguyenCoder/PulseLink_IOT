@@ -18,8 +18,11 @@ async function main() {
     await prisma.$connect();
     await worker.run();
 }
-void main().catch(async (error) => {
-    void error;
-    process.stderr.write("Notification worker stopped before entering its run loop\n");
+void main().catch((error) => {
+    process.stderr.write("Notification worker startup failed: " +
+        (error instanceof Error
+            ? (error.stack ?? error.message)
+            : String(error)) +
+        "\n");
     process.exitCode = 1;
 });
