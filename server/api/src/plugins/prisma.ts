@@ -26,7 +26,7 @@ export function createPrismaClient(): PrismaClient {
   const adapter = new PrismaPg({
     connectionString: env.DATABASE_URL,
     ssl: {
-      ca: readFileSync("../../etc/secrets/ca-cert.pem"),
+      ca: process.env.DB_SSL_CA,
       rejectUnauthorized: true,
     },
   });
