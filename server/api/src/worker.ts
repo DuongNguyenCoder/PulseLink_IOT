@@ -28,11 +28,9 @@ async function main(): Promise<void> {
 
 void main().catch((error: unknown) => {
   process.stderr.write(
-    "Notification worker startup failed: " +
-      (error instanceof Error
-        ? (error.stack ?? error.message)
-        : String(error)) +
-      "\n",
+    `Notification worker stopped: ${
+      error instanceof Error ? (error.stack ?? error.message) : String(error)
+    }\n`,
   );
 
   process.exitCode = 1;
