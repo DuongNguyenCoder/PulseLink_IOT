@@ -22,6 +22,22 @@ export const healthRoutes: FastifyPluginAsync = async (app) => {
       };
     } catch (error: unknown) {
       request.log.error(getSafeErrorLogFields(error), "Readiness check failed");
+      request.log.error(
+        {
+          errorType:
+            error instanceof Error ? error.constructor.name : typeof error,
+          errorCode:
+            typeof error === "object" && error !== null && "code" in error
+              ? error.code
+              : undefined,
+          message: error instanceof Error ? error.message : String(error),
+          meta:
+            typeof error === "object" && error !== null && "meta" in error
+              ? error.meta
+              : undefined,
+        },
+        "Readiness check failed",
+      );
       return reply.code(503).send({
         status: "error",
         service: "pulselink-api",
