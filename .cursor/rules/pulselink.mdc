@@ -1,0 +1,11 @@
+---
+description: Always apply PulseLink project architecture, safety, and coding standards.
+globs:
+alwaysApply: true
+---
+- Read and follow the root `AGENTS.md` before making changes.
+- For backend/API work, also read `server/api/AGENTS.md` and `.agents/skills/pulselink-development/SKILL.md`.
+- Keep the agreed stack unless the user explicitly approves a change.
+- Inspect existing files before editing; do not overwrite files blindly.
+- Never run destructive database commands or print secrets.
+- For each feature: plan, implement, test, update docs, report exact validation results.

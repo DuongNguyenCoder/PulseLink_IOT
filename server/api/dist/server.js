@@ -1,0 +1,35 @@
+import { env } from "./config/env.js";
+import { buildApp } from "./app.js";
+import { getSafeErrorLogFields } from "./shared/logging.js";
+async function main() {
+    let app;
+    try {
+        app = await buildApp();
+        const shutdown = async (signal) => {
+            app?.log.info({ signal }, "Shutting down PulseLink API");
+            try {
+                await app?.close();
+                process.exitCode = 0;
+            }
+            catch (error) {
+                app?.log.error(getSafeErrorLogFields(error), "Error during graceful shutdown");
+                process.exitCode = 1;
+            }
+        };
+        process.once("SIGINT", () => {
+            void shutdown("SIGINT");
+        });
+        process.once("SIGTERM", () => {
+            void shutdown("SIGTERM");
+        });
+        await app.listen({ host: env.HOST, port: env.PORT });
+    }
+    catch (error) {
+        if (app) {
+            app.log.error(getSafeErrorLogFields(error), "Failed to start PulseLink API");
+            await app.close();
+        }
+        process.exitCode = 1;
+    }
+}
+void main();

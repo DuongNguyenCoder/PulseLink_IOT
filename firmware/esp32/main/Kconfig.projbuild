@@ -1,0 +1,56 @@
+menu "PulseLink firmware"
+
+config PULSELINK_FIRMWARE_VERSION
+    string "Firmware version"
+    default "0.1.0-wifi-smoke"
+    help
+        Version printed at boot. Do not put secrets here.
+
+config PULSELINK_WIFI_SSID
+    string "Wi-Fi SSID"
+    default ""
+    help
+        Configure locally with menuconfig. This value is not logged.
+
+config PULSELINK_WIFI_PASSWORD
+    string "Wi-Fi password"
+    default ""
+    help
+        Configure locally with menuconfig. Never commit sdkconfig or log this value.
+
+config PULSELINK_BACKEND_URL
+    string "Backend health URL"
+    default ""
+    help
+        Local HTTP smoke-test URL, for example http://192.168.1.171:3000/health/live.
+        Do not put credentials or tokens in this URL. Leave empty to disable the test.
+
+config PULSELINK_EVENT_ENDPOINT_URL
+    string "Device event HTTPS endpoint"
+    default ""
+    help
+        Full HTTPS endpoint, for example https://api.example.com/v1/device-events.
+        Never include the Authorization header or device token in this URL.
+
+config PULSELINK_DEVICE_TOKEN
+    string "Operational device token"
+    default ""
+    help
+        Configure per-device in local sdkconfig or secure provisioning tooling.
+        Never commit this value or print it in logs.
+
+config PULSELINK_BUTTON_GPIO
+    int "Button GPIO (-1 until the carrier board is verified)"
+    range -1 48
+    default -1
+    help
+        Do not select a GPIO until the actual carrier-board schematic is confirmed.
+
+config PULSELINK_STATUS_LED_GPIO
+    int "Status LED GPIO (-1 until the carrier board is verified)"
+    range -1 48
+    default -1
+    help
+        Do not select a GPIO until the actual carrier-board schematic is confirmed.
+
+endmenu

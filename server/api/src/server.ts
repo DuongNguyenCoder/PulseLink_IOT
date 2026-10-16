@@ -1,24 +1,42 @@
-import Fastify from "fastify";
-import "dotenv/config";
+import { env } from "./config/env.js";
+import { buildApp } from "./app.js";
+import { getSafeErrorLogFields } from "./shared/logging.js";
 
-const app = Fastify({
-  logger: true,
-});
+async function main(): Promise<void> {
+  let app: Awaited<ReturnType<typeof buildApp>> | undefined;
 
-app.get("/health", async () => {
-  return {
-    status: "ok",
-    service: "ketnoi-api",
-    timestamp: new Date().toISOString(),
-  };
-});
+  try {
+    app = await buildApp();
 
-const port = Number(process.env.PORT ?? 3000);
-const host = process.env.HOST ?? "127.0.0.1";
+    const shutdown = async (signal: string): Promise<void> => {
+      app?.log.info({ signal }, "Shutting down PulseLink API");
+      try {
+        await app?.close();
+        process.exitCode = 0;
+      } catch (error: unknown) {
+        app?.log.error(
+          getSafeErrorLogFields(error),
+          "Error during graceful shutdown",
+        );
+        process.exitCode = 1;
+      }
+    };
 
-try {
-  await app.listen({ port, host });
-} catch (error) {
-  app.log.error(error);
-  process.exit(1);
+    process.once("SIGINT", () => {
+      void shutdown("SIGINT");
+    });
+    process.once("SIGTERM", () => {
+      void shutdown("SIGTERM");
+    });
+
+    await app.listen({ host: env.HOST, port: env.PORT });
+  } catch (error: unknown) {
+    if (app) {
+      app.log.error(getSafeErrorLogFields(error), "Failed to start PulseLink API");
+      await app.close();
+    }
+    process.exitCode = 1;
+  }
 }
+
+void main();

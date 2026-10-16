@@ -6,7 +6,7 @@
 
 generator client {
   provider = "prisma-client"
-  output   = "./generated/prisma"
+  output   = "../src/generated/prisma"
 }
 
 datasource db {
@@ -28,6 +28,28 @@ enum DeviceStatus {
   DISABLED
 }
 
+enum DeviceProvisioningState {
+  UNREGISTERED
+  READY
+  PROVISIONED
+  NEEDS_RECONNECTION
+  REVOKED
+}
+
+enum DeviceEnrollmentStatus {
+  UNENROLLED
+  ENROLLED
+  REVOKED
+}
+
+enum ProvisioningSessionStatus {
+  ACTIVE
+  REDEEMED
+  EXPIRED
+  LOCKED
+  REVOKED
+}
+
 enum DeviceEventType {
   BUTTON_PRESSED
 }
@@ -46,8 +68,47 @@ enum PushPlatform {
 
 enum NotificationStatus {
   PENDING
+  PROCESSING
   SENT
   FAILED
+}
+
+enum AccountStatus {
+  PENDING
+  ACTIVE
+  DISABLED
+}
+
+enum AppInstallationStatus {
+  ACTIVE
+  REVOKED
+  INVALID
+}
+
+enum MembershipRole {
+  OWNER
+  STAFF
+}
+
+enum MembershipStatus {
+  ACTIVE
+  SUSPENDED
+  REVOKED
+}
+
+enum SessionRevokeReason {
+  LOGOUT
+  ROTATED
+  REUSE_DETECTED
+  ACCOUNT_DISABLED
+  PASSWORD_RESET
+  ADMIN_REVOKED
+  EXPIRED
+}
+
+enum AccountTokenPurpose {
+  PASSWORD_RESET
+  EMAIL_VERIFICATION
 }
 
 // ================================
@@ -66,8 +127,167 @@ model Store {
 
   devices Device[]
   staff   Staff[]
+  memberships StoreMembership[]
+  auditEvents AuditEvent[]
+  provisioningSessions ProvisioningSession[]
 
   @@index([isActive])
+}
+
+// Append-only application audit record. Database-level immutability and
+// retention require deployment privileges/operations in addition to this model.
+model AuditEvent {
+  id           String   @id @default(cuid())
+  actorType    String   @db.VarChar(32)
+  actorId      String?  @db.VarChar(128)
+  action       String   @db.VarChar(100)
+  resourceType String   @db.VarChar(80)
+  resourceId   String   @db.VarChar(128)
+  storeId      String?
+  occurredAt   DateTime @default(now())
+  metadata     Json
+  requestId    String?  @db.VarChar(128)
+
+  store Store? @relation(fields: [storeId], references: [id], onDelete: Restrict)
+
+  @@index([occurredAt])
+  @@index([actorType, actorId, occurredAt])
+  @@index([resourceType, resourceId, occurredAt])
+  @@index([storeId, occurredAt])
+}
+
+// ================================
+// ACCOUNT
+// Owner identity. Staff membership is future scope; do not infer Account rows
+// from the legacy Staff table without an explicit, audited mapping.
+// ================================
+
+model Account {
+  id              String        @id @default(cuid())
+  emailNormalized String        @unique @db.VarChar(254)
+  passwordHash    String        @db.VarChar(512)
+  status          AccountStatus @default(PENDING)
+  emailVerifiedAt DateTime?
+  authVersion     Int           @default(0)
+  disabledAt      DateTime?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  installations AppInstallation[]
+  sessions      Session[]
+  memberships   StoreMembership[]
+  tokens        AccountToken[]
+  provisioningSessions ProvisioningSession[]
+
+  @@index([status])
+}
+
+// ================================
+// APP INSTALLATION
+// FCM token ciphertext is protected by a runtime-managed key. The key is not
+// stored in PostgreSQL or source code. Fingerprint is a stable lookup value.
+// ================================
+
+model AppInstallation {
+  id                  String                @id @default(cuid())
+  accountId           String
+  platform            PushPlatform
+  fcmTokenCiphertext  String                @db.Text
+  fcmTokenFingerprint String                @db.VarChar(64)
+  fcmTokenKeyVersion  Int
+  status              AppInstallationStatus @default(ACTIVE)
+  lastSeenAt          DateTime?
+  revokedAt           DateTime?
+  revokeReason        String?               @db.VarChar(120)
+  createdAt           DateTime              @default(now())
+  updatedAt           DateTime              @updatedAt
+
+  account  Account   @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  sessions Session[]
+
+  // Required as the target of Session's composite relation. This prevents a
+  // session from pairing an installation with a different account.
+  @@unique([id, accountId])
+  @@index([accountId, status])
+  @@index([status, lastSeenAt])
+}
+
+// ================================
+// SESSION
+// Opaque refresh tokens are represented only by a verifier/hash. Rotation,
+// reuse detection and account-wide revocation require service transactions.
+// ================================
+
+model Session {
+  id                  String             @id @default(cuid())
+  accountId           String
+  appInstallationId   String
+  refreshTokenHash    String             @unique @db.VarChar(128)
+  tokenFamilyId       String             @db.VarChar(64)
+  generation          Int                @default(0)
+  createdAt           DateTime           @default(now())
+  lastUsedAt          DateTime?
+  idleExpiresAt       DateTime
+  absoluteExpiresAt   DateTime
+  rotatedAt           DateTime?
+  revokedAt           DateTime?
+  revokeReason        SessionRevokeReason?
+  updatedAt           DateTime           @updatedAt
+
+  account       Account         @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  installation  AppInstallation @relation(fields: [appInstallationId, accountId], references: [id, accountId], onDelete: Restrict)
+
+  @@index([accountId, revokedAt])
+  @@index([appInstallationId, revokedAt])
+  @@index([tokenFamilyId, generation])
+  @@index([idleExpiresAt, absoluteExpiresAt])
+}
+
+// ================================
+// STORE MEMBERSHIP
+// The MVP policy allows one ACTIVE OWNER per Store. The partial unique index
+// enforcing that rule is declared in the additive migration because Prisma
+// schema indexes cannot express PostgreSQL partial predicates.
+// ================================
+
+model StoreMembership {
+  id         String           @id @default(cuid())
+  accountId  String
+  storeId    String
+  role       MembershipRole
+  status     MembershipStatus @default(ACTIVE)
+  createdAt  DateTime         @default(now())
+  updatedAt  DateTime         @updatedAt
+  revokedAt  DateTime?
+
+  account Account @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  store   Store   @relation(fields: [storeId], references: [id], onDelete: Restrict)
+
+  @@unique([accountId, storeId])
+  @@index([accountId, status])
+  @@index([storeId, status, role])
+}
+
+// ================================
+// ACCOUNT TOKENS
+// Single-use password reset and email verification tokens. Only a verifier
+// is stored; consumption/revocation must be a conditional transaction.
+// ================================
+
+model AccountToken {
+  id          String              @id @default(cuid())
+  accountId   String
+  purpose     AccountTokenPurpose
+  tokenHash   String              @unique @db.VarChar(128)
+  expiresAt   DateTime
+  consumedAt  DateTime?
+  revokedAt   DateTime?
+  createdAt   DateTime            @default(now())
+
+  account Account @relation(fields: [accountId], references: [id], onDelete: Restrict)
+
+  @@index([accountId, purpose, expiresAt])
+  @@index([accountId, purpose, consumedAt, revokedAt])
 }
 
 // ================================
@@ -82,6 +302,12 @@ model Device {
   name             String       @db.VarChar(120)
   type             DeviceType   @default(CALL_BUTTON)
   status           DeviceStatus @default(PENDING)
+  provisioningState DeviceProvisioningState @default(UNREGISTERED)
+  enrollmentStatus  DeviceEnrollmentStatus  @default(UNENROLLED)
+  enrollmentPublicKey String?      @db.Text
+  enrollmentKeyVersion Int?
+  enrolledAt        DateTime?
+  enrollmentRevokedAt DateTime?
   firmwareVersion  String?      @db.VarChar(40)
   lastSeenAt       DateTime?
   storeId          String
@@ -90,9 +316,45 @@ model Device {
 
   store  Store         @relation(fields: [storeId], references: [id], onDelete: Restrict)
   events DeviceEvent[]
+  provisioningSessions ProvisioningSession[]
 
   @@index([storeId, status])
+  @@index([storeId, provisioningState])
+  @@index([enrollmentStatus, enrollmentKeyVersion])
   @@index([lastSeenAt])
+  @@unique([id, storeId])
+}
+
+// Bootstrap sessions are short-lived, single-use records. Plaintext bootstrap
+// secrets are never persisted; redemption and attempt counting are service
+// transaction invariants implemented in J.3.
+model ProvisioningSession {
+  id                String                    @id @default(cuid())
+  deviceId          String
+  storeId           String
+  actorAccountId    String
+  bootstrapVerifier String                    @unique @db.VarChar(128)
+  challengeHash     String                    @db.VarChar(128)
+  idempotencyKey    String                    @db.VarChar(128)
+  status            ProvisioningSessionStatus @default(ACTIVE)
+  attemptCount      Int                       @default(0)
+  maxAttempts       Int                       @default(5)
+  expiresAt         DateTime
+  lockedAt          DateTime?
+  consumedAt        DateTime?
+  revokedAt         DateTime?
+  lastAttemptAt     DateTime?
+  createdAt         DateTime                  @default(now())
+  updatedAt         DateTime                  @updatedAt
+
+  device Device  @relation(fields: [deviceId, storeId], references: [id, storeId], onDelete: Restrict)
+  store  Store   @relation(fields: [storeId], references: [id], onDelete: Restrict)
+  actor  Account @relation(fields: [actorAccountId], references: [id], onDelete: Restrict)
+
+  @@unique([deviceId, actorAccountId, idempotencyKey])
+  @@index([deviceId, status, expiresAt])
+  @@index([actorAccountId, createdAt])
+  @@index([storeId, status, expiresAt])
 }
 
 // ================================
@@ -173,6 +435,8 @@ model DeviceNotification {
   pushTokenId    String
   status         NotificationStatus @default(PENDING)
   attempts       Int                @default(0)
+  nextAttemptAt  DateTime           @default(now())
+  leaseUntil     DateTime?
   fcmMessageId   String?            @db.VarChar(255)
   lastError      String?            @db.VarChar(1000)
   sentAt         DateTime?
@@ -184,6 +448,20 @@ model DeviceNotification {
 
   // Một sự kiện không tạo hai bản ghi gửi cho cùng một token
   @@unique([eventId, pushTokenId])
-  @@index([status, createdAt])
+  @@index([status, nextAttemptAt])
+  @@index([status, leaseUntil])
+}
+
+// Durable worker liveness and last-successful-processing signal. One row per
+// worker identity keeps health information available across process restarts.
+model NotificationWorkerHeartbeat {
+  id              String   @id @default(cuid())
+  workerId        String   @unique @db.VarChar(128)
+  lastHeartbeatAt DateTime
+  lastProcessedAt DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([lastHeartbeatAt])
 }
 
