@@ -4,12 +4,13 @@
   "description": "PulseLink IoT API",
   "scripts": {
     "dev": "tsx watch src/server.ts",
-    "build": "tsc",
+    "build": "npm run db:generate && tsc",
     "start": "node dist/server.js",
     "worker": "tsx src/worker.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:unit": "vitest run",
+    "db:generate": "prisma generate",
     "db:test:up": "docker compose -f ../../infrastructure/docker/compose.test.yaml up -d postgres-test",
     "db:test:ps": "docker compose -f ../../infrastructure/docker/compose.test.yaml ps postgres-test"
   },
