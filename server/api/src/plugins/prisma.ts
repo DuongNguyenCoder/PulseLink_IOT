@@ -2,6 +2,7 @@ import { PrismaPg } from "@prisma/adapter-pg";
 import type { FastifyInstance } from "fastify";
 import { PrismaClient } from "../generated/prisma/client.js";
 import { env } from "../config/env.js";
+import { readFileSync } from "node:fs";
 
 declare module "fastify" {
   interface FastifyInstance {
@@ -24,6 +25,10 @@ console.info("Worker runtime config", {
 export function createPrismaClient(): PrismaClient {
   const adapter = new PrismaPg({
     connectionString: env.DATABASE_URL,
+    ssl: {
+      ca: readFileSync("../../etc/secrets/ca-cert.pem"),
+      rejectUnauthorized: true,
+    },
   });
   return new PrismaClient({ adapter });
 }
