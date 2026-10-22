@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { performance } from "node:perf_hooks";
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import {
@@ -84,46 +85,82 @@ export const authRoutes: FastifyPluginAsync<AuthRouteOptions> = async (
   options,
 ) => {
   app.post("/signup", async (request, reply) => {
-    const parsed = credentialsSchema.safeParse(request.body);
-    if (!parsed.success) throw new AccountAuthError("Invalid request", 400);
-
-    const account = await registerAccount(app.prisma, parsed.data);
-    const verification = await issueVerificationToken(app.prisma, account.id);
     try {
-      await options.emailSender.sendVerification({
-        email: account.emailNormalized,
-        token: verification.plaintext,
-        expiresAt: verification.expiresAt,
-      });
-    } catch (error: unknown) {
-      request.log.error(
-        getSafeErrorLogFields(error),
-        "Verification email delivery failed",
-      );
-      if (
-        error instanceof EmailDeliveryError &&
-        error.deliveryOutcome === "not-sent"
-      ) {
-        try {
-          await cleanupPendingSignup(
-            app.prisma,
-            account.id,
-            verification.plaintext,
-          );
-        } catch (cleanupError: unknown) {
-          request.log.error(
-            getSafeErrorLogFields(cleanupError),
-            "Pending signup cleanup failed",
-          );
+      const startedAt = performance.now();
+      const logPhase = (event: string, phaseStartedAt = startedAt): void => {
+        request.log.info(
+          { durationMs: Math.round(performance.now() - phaseStartedAt) },
+          event,
+        );
+      };
+
+      request.log.info("signup.started");
+      const parsed = credentialsSchema.safeParse(request.body);
+      if (!parsed.success) throw new AccountAuthError("Invalid request", 400);
+      logPhase("signup.validation.completed");
+
+      const persistenceStartedAt = performance.now();
+      request.log.info("signup.account_persistence.started");
+      const account = await registerAccount(app.prisma, parsed.data);
+      const verification = await issueVerificationToken(app.prisma, account.id);
+      logPhase("signup.account_persistence.completed", persistenceStartedAt);
+
+      request.log.info("signup.email_delivery.started");
+      const smtpStartedAt = performance.now();
+      request.log.info("signup.smtp_send.started");
+      try {
+        await options.emailSender.sendVerification({
+          email: account.emailNormalized,
+          token: verification.plaintext,
+          expiresAt: verification.expiresAt,
+        });
+        logPhase("signup.smtp_send.completed", smtpStartedAt);
+        logPhase("signup.email_delivery.completed");
+      } catch (error: unknown) {
+        request.log.error(
+          {
+            ...getSafeErrorLogFields(error),
+            durationMs: Math.round(performance.now() - smtpStartedAt),
+          },
+          "signup.smtp_send.failed",
+        );
+        if (
+          error instanceof EmailDeliveryError &&
+          error.deliveryOutcome === "not-sent"
+        ) {
+          const cleanupStartedAt = performance.now();
+          request.log.info("signup.cleanup.started");
+          try {
+            await cleanupPendingSignup(
+              app.prisma,
+              account.id,
+              verification.plaintext,
+            );
+            logPhase("signup.cleanup.completed", cleanupStartedAt);
+          } catch (cleanupError: unknown) {
+            request.log.error(
+              {
+                ...getSafeErrorLogFields(cleanupError),
+                durationMs: Math.round(performance.now() - cleanupStartedAt),
+              },
+              "signup.cleanup.failed",
+            );
+          }
         }
+        throw error;
       }
+
+      const response = {
+        data: { accountId: account.id, status: account.status },
+        meta: { requestId: request.id },
+      };
+      const result = await reply.code(201).send(response);
+      logPhase("signup.response.completed");
+      return result;
+    } catch (error: unknown) {
+      request.log.error(getSafeErrorLogFields(error), "signup.request.failed");
       throw error;
     }
-
-    return reply.code(201).send({
-      data: { accountId: account.id, status: account.status },
-      meta: { requestId: request.id },
-    });
   });
 
   app.post("/verify-email", async (request, reply) => {

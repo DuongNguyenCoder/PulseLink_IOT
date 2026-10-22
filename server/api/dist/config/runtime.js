@@ -182,6 +182,7 @@ function createEmailSender() {
         hostConfigured: true,
         port: env.SMTP_PORT,
         secure: env.SMTP_SECURE,
+        timeoutMs: env.SMTP_TIMEOUT_MS,
         authenticationConfigured: env.SMTP_USERNAME !== undefined,
     });
     return new SmtpEmailSender({
