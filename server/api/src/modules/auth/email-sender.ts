@@ -27,14 +27,22 @@ export interface SmtpEmailSenderConfig {
 export class EmailDeliveryError extends Error {
   readonly statusCode = 503;
   readonly deliveryOutcome: "not-sent" | "unknown";
+  readonly deliveryCode:
+    | "SMTP_AUTH_FAILED"
+    | "SMTP_ENVELOPE_REJECTED"
+    | "SMTP_CONNECTION_FAILED"
+    | "SMTP_TIMEOUT"
+    | "SMTP_PROVIDER_ERROR";
 
   constructor(
     message: string,
     deliveryOutcome: "not-sent" | "unknown" = "unknown",
+    deliveryCode: EmailDeliveryError["deliveryCode"] = "SMTP_PROVIDER_ERROR",
   ) {
     super(message);
     this.name = "EmailDeliveryError";
     this.deliveryOutcome = deliveryOutcome;
+    this.deliveryCode = deliveryCode;
   }
 }
 
@@ -125,10 +133,43 @@ export class SmtpEmailSender implements AuthEmailSender {
         typeof error === "object" && error !== null && "code" in error
           ? error.code
           : undefined;
-      const notSent = code === "EAUTH" || code === "EENVELOPE";
+      const providerCode = typeof code === "string" ? code : undefined;
+      if (providerCode === "EAUTH") {
+        throw new EmailDeliveryError(
+          "SMTP email delivery failed",
+          "not-sent",
+          "SMTP_AUTH_FAILED",
+        );
+      }
+      if (providerCode === "EENVELOPE") {
+        throw new EmailDeliveryError(
+          "SMTP email delivery failed",
+          "not-sent",
+          "SMTP_ENVELOPE_REJECTED",
+        );
+      }
+      if (
+        ["ECONNECTION", "ECONNREFUSED", "ENOTFOUND"].includes(
+          providerCode ?? "",
+        )
+      ) {
+        throw new EmailDeliveryError(
+          "SMTP email delivery failed",
+          "not-sent",
+          "SMTP_CONNECTION_FAILED",
+        );
+      }
+      if (["ETIMEDOUT", "ESOCKET"].includes(providerCode ?? "")) {
+        throw new EmailDeliveryError(
+          "SMTP email delivery failed",
+          "unknown",
+          "SMTP_TIMEOUT",
+        );
+      }
       throw new EmailDeliveryError(
         "SMTP email delivery failed",
-        notSent ? "not-sent" : "unknown",
+        "unknown",
+        "SMTP_PROVIDER_ERROR",
       );
     }
   }

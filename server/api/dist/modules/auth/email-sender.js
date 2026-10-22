@@ -2,10 +2,12 @@ import nodemailer from "nodemailer";
 export class EmailDeliveryError extends Error {
     statusCode = 503;
     deliveryOutcome;
-    constructor(message, deliveryOutcome = "unknown") {
+    deliveryCode;
+    constructor(message, deliveryOutcome = "unknown", deliveryCode = "SMTP_PROVIDER_ERROR") {
         super(message);
         this.name = "EmailDeliveryError";
         this.deliveryOutcome = deliveryOutcome;
+        this.deliveryCode = deliveryCode;
     }
 }
 function createLink(template, token) {
@@ -67,8 +69,20 @@ export class SmtpEmailSender {
             const code = typeof error === "object" && error !== null && "code" in error
                 ? error.code
                 : undefined;
-            const notSent = code === "EAUTH" || code === "EENVELOPE";
-            throw new EmailDeliveryError("SMTP email delivery failed", notSent ? "not-sent" : "unknown");
+            const providerCode = typeof code === "string" ? code : undefined;
+            if (providerCode === "EAUTH") {
+                throw new EmailDeliveryError("SMTP email delivery failed", "not-sent", "SMTP_AUTH_FAILED");
+            }
+            if (providerCode === "EENVELOPE") {
+                throw new EmailDeliveryError("SMTP email delivery failed", "not-sent", "SMTP_ENVELOPE_REJECTED");
+            }
+            if (["ECONNECTION", "ECONNREFUSED", "ENOTFOUND"].includes(providerCode ?? "")) {
+                throw new EmailDeliveryError("SMTP email delivery failed", "not-sent", "SMTP_CONNECTION_FAILED");
+            }
+            if (["ETIMEDOUT", "ESOCKET"].includes(providerCode ?? "")) {
+                throw new EmailDeliveryError("SMTP email delivery failed", "unknown", "SMTP_TIMEOUT");
+            }
+            throw new EmailDeliveryError("SMTP email delivery failed", "unknown", "SMTP_PROVIDER_ERROR");
         }
     }
 }

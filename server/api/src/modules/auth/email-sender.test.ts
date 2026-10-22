@@ -61,6 +61,7 @@ describe("SmtpEmailSender", () => {
       }),
     ).rejects.toMatchObject<Partial<EmailDeliveryError>>({
       deliveryOutcome: "not-sent",
+      deliveryCode: "SMTP_AUTH_FAILED",
       statusCode: 503,
     });
   });
@@ -79,6 +80,10 @@ describe("SmtpEmailSender", () => {
         token: "reset-token",
         expiresAt: new Date(),
       }),
-    ).rejects.toMatchObject({ deliveryOutcome: "unknown", statusCode: 503 });
+    ).rejects.toMatchObject({
+      deliveryOutcome: "unknown",
+      deliveryCode: "SMTP_TIMEOUT",
+      statusCode: 503,
+    });
   });
 });

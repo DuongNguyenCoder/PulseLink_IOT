@@ -3,6 +3,7 @@ package com.pulselink.fcmtest
 import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URI
+import java.net.SocketTimeoutException
 import org.json.JSONObject
 
 data class AuthTokens(val accessToken: String, val refreshToken: String)
@@ -115,8 +116,10 @@ class ApiClient(baseUrl: String) {
             json?.optJSONObject("data") ?: JSONObject()
         } catch (error: ApiException) {
             throw error
+        } catch (_: SocketTimeoutException) {
+            throw ApiException(0, "TIMEOUT", "The request timed out. Check your connection and try again.")
         } catch (_: IOException) {
-            throw ApiException(0, null, "Network error. Check your connection and try again.")
+            throw ApiException(0, "NETWORK_ERROR", "Unable to connect to the backend. Check your connection and try again.")
         } finally {
             connection.disconnect()
         }

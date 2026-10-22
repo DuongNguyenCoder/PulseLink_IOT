@@ -308,12 +308,18 @@ class MainActivity : Activity() {
     }
 
     private fun safeErrorMessage(error: Throwable): String = when (error) {
-        is ApiException -> when (error.errorCode) {
-            "FORBIDDEN" -> "Email verification is required before signing in"
-            "RATE_LIMITED" -> "Too many requests. Please wait and try again."
-            "UNAUTHENTICATED" -> "The credentials or token are invalid"
-            "CONFLICT" -> "The request conflicts with current account state"
-            else -> error.message ?: "Request failed"
+        is ApiException -> when {
+            error.errorCode == "TIMEOUT" -> "The request timed out. Check your connection and try again."
+            error.errorCode == "NETWORK_ERROR" -> "Unable to connect to the backend. Check your connection and try again."
+            error.errorCode == "FORBIDDEN" -> "Email verification is required before signing in"
+            error.errorCode == "RATE_LIMITED" || error.statusCode == 429 -> "Too many requests. Please wait and try again."
+            error.errorCode == "UNAUTHENTICATED" || error.statusCode == 401 -> "The credentials or token are invalid"
+            error.errorCode == "CONFLICT" || error.statusCode == 409 -> "The request conflicts with current account state"
+            error.errorCode == "DEPENDENCY_UNAVAILABLE" || error.statusCode == 503 ->
+                "The email service is temporarily unavailable. Signup or email delivery was not confirmed."
+            error.errorCode == "VALIDATION_ERROR" || error.statusCode == 400 ->
+                "Please check the submitted information."
+            else -> "The request could not be completed. Please try again."
         }
         is IllegalArgumentException -> error.message ?: "Invalid configuration"
         else -> "Network or server error. Please try again."

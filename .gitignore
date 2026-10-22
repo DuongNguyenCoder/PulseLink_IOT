@@ -5,3 +5,5 @@
 **/sdkconfig
 **/sdkconfig.old
 **/build/
+/jwt-private.pem
+/jwt-public.pem
