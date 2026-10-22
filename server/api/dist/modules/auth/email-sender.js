@@ -86,6 +86,72 @@ export class SmtpEmailSender {
         }
     }
 }
+export class ResendEmailSender {
+    config;
+    fetchEmail;
+    constructor(config, fetchEmail = globalThis.fetch.bind(globalThis)) {
+        this.config = config;
+        this.fetchEmail = fetchEmail;
+    }
+    async sendVerification(input) {
+        await this.send({
+            to: input.email,
+            subject: "Verify your PulseLink email",
+            title: "Verify your PulseLink email",
+            link: createLink(this.config.verificationUrlTemplate, input.token),
+            token: input.token,
+            expiresAt: input.expiresAt,
+        });
+    }
+    async sendPasswordReset(input) {
+        await this.send({
+            to: input.email,
+            subject: "Reset your PulseLink password",
+            title: "Reset your PulseLink password",
+            link: createLink(this.config.passwordResetUrlTemplate, input.token),
+            token: input.token,
+            expiresAt: input.expiresAt,
+        });
+    }
+    async send(input) {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), this.config.timeoutMs);
+        try {
+            const response = await this.fetchEmail("https://api.resend.com/emails", {
+                method: "POST",
+                headers: {
+                    Authorization: `Bearer ${this.config.apiKey}`,
+                    "Content-Type": "application/json",
+                },
+                body: JSON.stringify({
+                    from: `${this.config.fromName} <${this.config.fromEmail}>`,
+                    to: [input.to],
+                    subject: input.subject,
+                    text: textBody(input.title, input.link, input.token, input.expiresAt),
+                    html: `<p>${input.title}</p><p><a href="${input.link}">Continue in PulseLink</a></p><p>This link expires at ${input.expiresAt.toISOString()}.</p>`,
+                }),
+                signal: controller.signal,
+            });
+            if (response.ok)
+                return;
+            if (response.status === 401 || response.status === 403) {
+                throw new EmailDeliveryError("Email API delivery failed", "not-sent", "EMAIL_API_AUTH_FAILED");
+            }
+            throw new EmailDeliveryError("Email API delivery failed", "not-sent", "EMAIL_API_REJECTED");
+        }
+        catch (error) {
+            if (error instanceof EmailDeliveryError)
+                throw error;
+            if (error instanceof DOMException && error.name === "AbortError") {
+                throw new EmailDeliveryError("Email API delivery failed", "unknown", "EMAIL_API_TIMEOUT");
+            }
+            throw new EmailDeliveryError("Email API delivery failed", "unknown", "EMAIL_API_NETWORK_ERROR");
+        }
+        finally {
+            clearTimeout(timeout);
+        }
+    }
+}
 /**
  * The repository has no email provider implementation yet. Keeping this
  * explicit failure is safer than pretending a verification/reset email was

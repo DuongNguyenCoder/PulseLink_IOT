@@ -40,7 +40,8 @@ export function getSafeErrorLogFields(error) {
             ? { deliveryOutcome: candidate.deliveryOutcome }
             : {}),
         ...(typeof candidate.deliveryCode === "string" &&
-            candidate.deliveryCode.startsWith("SMTP_")
+            (candidate.deliveryCode.startsWith("SMTP_") ||
+                candidate.deliveryCode.startsWith("EMAIL_API_"))
             ? { deliveryCode: candidate.deliveryCode }
             : {}),
     };

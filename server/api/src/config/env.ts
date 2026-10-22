@@ -39,6 +39,9 @@ const envSchema = z.object({
     .regex(/^[A-Za-z0-9:_-]+$/)
     .default("pulselink"),
   LOGIN_RATE_LIMIT_KEY_SECRET: z.string().min(32).optional(),
+  EMAIL_PROVIDER: z.enum(["smtp", "resend"]).default("smtp"),
+  RESEND_API_KEY: z.string().min(1).optional(),
+  EMAIL_API_TIMEOUT_MS: z.coerce.number().int().positive().default(10_000),
   SMTP_HOST: z.string().min(1).optional(),
   SMTP_PORT: z.coerce.number().int().min(1).max(65_535).default(587),
   SMTP_SECURE: z

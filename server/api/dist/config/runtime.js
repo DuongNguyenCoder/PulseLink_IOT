@@ -1,6 +1,6 @@
 import { importPKCS8, importSPKI } from "jose";
 import { env } from "./env.js";
-import { SmtpEmailSender, unavailableEmailSender, } from "../modules/auth/email-sender.js";
+import { ResendEmailSender, SmtpEmailSender, unavailableEmailSender, } from "../modules/auth/email-sender.js";
 import { InMemoryRateLimiter, withRateLimiterTimeout, } from "../modules/auth/in-memory-rate-limiter.js";
 import { createClient } from "redis";
 import { RedisRateLimiter } from "../modules/auth/redis-rate-limiter.js";
@@ -141,6 +141,58 @@ function validateProductionRateLimiterConfiguration() {
     }
 }
 function createEmailSender() {
+    if (env.EMAIL_PROVIDER === "resend") {
+        if (env.RESEND_API_KEY === undefined) {
+            writeStartupLog("email-api.configuration.incomplete", {
+                provider: "resend",
+                missing: ["RESEND_API_KEY"],
+            });
+            if (env.NODE_ENV === "production") {
+                throw new Error("Resend email provider configuration is incomplete");
+            }
+            return unavailableEmailSender;
+        }
+        const missing = [
+            ["SMTP_FROM_EMAIL", env.SMTP_FROM_EMAIL],
+            ["EMAIL_VERIFICATION_URL_TEMPLATE", env.EMAIL_VERIFICATION_URL_TEMPLATE],
+            ["PASSWORD_RESET_URL_TEMPLATE", env.PASSWORD_RESET_URL_TEMPLATE],
+        ]
+            .filter(([, value]) => value === undefined)
+            .map(([name]) => name);
+        if (missing.length > 0) {
+            writeStartupLog("email-api.configuration.incomplete", {
+                provider: "resend",
+                missing,
+            });
+            if (env.NODE_ENV === "production") {
+                throw new Error("Resend email provider configuration is incomplete");
+            }
+            return unavailableEmailSender;
+        }
+        if (env.NODE_ENV === "production") {
+            for (const template of [
+                env.EMAIL_VERIFICATION_URL_TEMPLATE,
+                env.PASSWORD_RESET_URL_TEMPLATE,
+            ]) {
+                if (!template?.startsWith("https://")) {
+                    throw new Error("Production email links must use HTTPS");
+                }
+            }
+        }
+        writeStartupLog("email-api.configuration.valid", {
+            provider: "resend",
+            senderConfigured: true,
+            timeoutMs: env.EMAIL_API_TIMEOUT_MS,
+        });
+        return new ResendEmailSender({
+            apiKey: env.RESEND_API_KEY,
+            fromEmail: env.SMTP_FROM_EMAIL,
+            fromName: env.SMTP_FROM_NAME,
+            verificationUrlTemplate: env.EMAIL_VERIFICATION_URL_TEMPLATE,
+            passwordResetUrlTemplate: env.PASSWORD_RESET_URL_TEMPLATE,
+            timeoutMs: env.EMAIL_API_TIMEOUT_MS,
+        });
+    }
     const values = [
         env.SMTP_HOST,
         env.SMTP_FROM_EMAIL,
