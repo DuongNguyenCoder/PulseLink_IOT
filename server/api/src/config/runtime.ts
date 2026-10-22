@@ -13,10 +13,17 @@ import { createClient } from "redis";
 import { RedisRateLimiter } from "../modules/auth/redis-rate-limiter.js";
 import { type FcmKeyMaterial } from "../modules/installations/fcm-crypto.js";
 import { normalizePem } from "./pem.js";
+import {
+  describeRedisEndpoint,
+  safeStartupError,
+  writeStartupLog,
+} from "./startup-log.js";
 
 function required(name: string, value: string | undefined): string {
-  if (value === undefined || value.trim() === "")
+  if (value === undefined || value.trim() === "") {
+    writeStartupLog("configuration.required.missing", { name });
     throw new Error(`Missing required configuration: ${name}`);
+  }
   return value;
 }
 
@@ -37,6 +44,7 @@ async function loadJwtKeys(): Promise<{
   signingKey: { kid: string; privateKeyPem: string };
   verificationKeys: ReadonlyMap<string, KeyInput>;
 }> {
+  writeStartupLog("jwt.parse.start");
   const kid = required("JWT_KEY_ID", env.JWT_KEY_ID);
   const privateKeyPem = normalizePem(
     required("JWT_SIGNING_KEY_PEM", env.JWT_SIGNING_KEY_PEM),
@@ -44,19 +52,26 @@ async function loadJwtKeys(): Promise<{
   const publicKeyPem = normalizePem(
     required("JWT_VERIFICATION_KEY_PEM", env.JWT_VERIFICATION_KEY_PEM),
   );
-  await importPKCS8(privateKeyPem, "RS256");
-  const verificationKey = await importSPKI(publicKeyPem, "RS256");
-  return {
-    signingKey: { kid, privateKeyPem },
-    verificationKeys: new Map([[kid, verificationKey]]),
-  };
+  try {
+    await importPKCS8(privateKeyPem, "RS256");
+    const verificationKey = await importSPKI(publicKeyPem, "RS256");
+    writeStartupLog("jwt.parse.success", { keyIdConfigured: kid.length > 0 });
+    return {
+      signingKey: { kid, privateKeyPem },
+      verificationKeys: new Map([[kid, verificationKey]]),
+    };
+  } catch (error: unknown) {
+    writeStartupLog("jwt.parse.failure", safeStartupError(error));
+    throw new Error("JWT key material could not be parsed");
+  }
 }
 
 function loadFcmKeys(): FcmKeyMaterial {
+  writeStartupLog("fcm-key.parse.start");
   const activeVersion = env.FCM_KEY_VERSION;
   if (activeVersion === undefined)
     throw new Error("Missing required configuration: FCM_KEY_VERSION");
-  return {
+  const keyMaterial = {
     activeVersion,
     encryptionKeys: new Map([
       [
@@ -69,6 +84,8 @@ function loadFcmKeys(): FcmKeyMaterial {
       env.FCM_FINGERPRINT_KEY_B64,
     ),
   };
+  writeStartupLog("fcm-key.parse.success", { activeVersion });
+  return keyMaterial;
 }
 
 async function withStartupTimeout<T>(
@@ -108,6 +125,9 @@ async function createLoginRateLimiter(): Promise<{
       ),
       env.LOGIN_RATE_LIMIT_TIMEOUT_MS,
     );
+    writeStartupLog("rate-limit.backend.in-memory", {
+      environment: env.NODE_ENV,
+    });
     return { limiter, close: async () => undefined };
   }
 
@@ -120,15 +140,25 @@ async function createLoginRateLimiter(): Promise<{
     throw new Error("Production Redis rate limiting requires a redis:// URL");
   }
 
+  writeStartupLog("redis.connect.start", {
+    endpoint: describeRedisEndpoint(redisUrl),
+    timeoutMs: env.LOGIN_RATE_LIMIT_TIMEOUT_MS,
+  });
+
   const client = createClient({
     url: redisUrl,
     socket: { connectTimeout: env.LOGIN_RATE_LIMIT_TIMEOUT_MS },
   });
-  client.on("error", () => undefined);
+  client.on("error", (error: unknown) => {
+    writeStartupLog("redis.client.error", safeStartupError(error));
+  });
   try {
     await withStartupTimeout(client.connect(), env.LOGIN_RATE_LIMIT_TIMEOUT_MS);
+    writeStartupLog("redis.connect.success");
     await withStartupTimeout(client.ping(), env.LOGIN_RATE_LIMIT_TIMEOUT_MS);
+    writeStartupLog("redis.ping.success");
   } catch (error) {
+    writeStartupLog("redis.connect.failure", safeStartupError(error));
     if (client.isOpen) await client.quit().catch(() => undefined);
     throw new Error("Redis rate-limit backend is unavailable", {
       cause: error,
@@ -176,6 +206,19 @@ function createEmailSender() {
   ];
   const configured = values.every((value) => value !== undefined);
   if (!configured) {
+    writeStartupLog("smtp.configuration.incomplete", {
+      missing: [
+        ["SMTP_HOST", env.SMTP_HOST],
+        ["SMTP_FROM_EMAIL", env.SMTP_FROM_EMAIL],
+        [
+          "EMAIL_VERIFICATION_URL_TEMPLATE",
+          env.EMAIL_VERIFICATION_URL_TEMPLATE,
+        ],
+        ["PASSWORD_RESET_URL_TEMPLATE", env.PASSWORD_RESET_URL_TEMPLATE],
+      ]
+        .filter(([, value]) => value === undefined)
+        .map(([name]) => name),
+    });
     if (env.NODE_ENV === "production")
       throw new Error("SMTP email provider configuration is incomplete");
     return unavailableEmailSender;
@@ -192,6 +235,12 @@ function createEmailSender() {
         throw new Error("Production email links must use HTTPS");
     }
   }
+  writeStartupLog("smtp.configuration.valid", {
+    hostConfigured: true,
+    port: env.SMTP_PORT,
+    secure: env.SMTP_SECURE,
+    authenticationConfigured: env.SMTP_USERNAME !== undefined,
+  });
   return new SmtpEmailSender({
     host: env.SMTP_HOST as string,
     port: env.SMTP_PORT,
@@ -207,6 +256,10 @@ function createEmailSender() {
 }
 
 export async function createRuntimeOptions(): Promise<BuildAppOptions> {
+  writeStartupLog("runtime.configuration.start", {
+    environment: env.NODE_ENV,
+    rateLimitBackend: env.LOGIN_RATE_LIMIT_BACKEND,
+  });
   const healthDiagnosticsToken = env.HEALTH_DIAGNOSTICS_TOKEN;
   validateProductionRateLimiterConfiguration();
   if (env.NODE_ENV === "production") {
@@ -230,6 +283,7 @@ export async function createRuntimeOptions(): Promise<BuildAppOptions> {
     env.LOGIN_RATE_LIMIT_TIMEOUT_MS,
   );
 
+  writeStartupLog("runtime.configuration.success");
   return {
     health: { diagnosticsToken: healthDiagnosticsToken },
     auth: {

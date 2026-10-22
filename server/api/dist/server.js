@@ -2,6 +2,7 @@ import { env } from "./config/env.js";
 import { createRuntimeOptions } from "./config/runtime.js";
 import { buildApp } from "./app.js";
 import { getSafeErrorLogFields } from "./shared/logging.js";
+import { safeStartupError, writeStartupLog } from "./config/startup-log.js";
 async function main() {
     let app;
     let runtimeClose;
@@ -29,6 +30,7 @@ async function main() {
         await app.listen({ host: env.HOST, port: env.PORT });
     }
     catch (error) {
+        writeStartupLog("runtime.startup.failure", safeStartupError(error));
         if (app) {
             app.log.error(getSafeErrorLogFields(error), "Failed to start PulseLink API");
             await app.close();

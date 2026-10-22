@@ -2,6 +2,7 @@ import { PrismaPg } from "@prisma/adapter-pg";
 import type { FastifyInstance } from "fastify";
 import { PrismaClient } from "../generated/prisma/client.js";
 import { env } from "../config/env.js";
+import { safeStartupError, writeStartupLog } from "../config/startup-log.js";
 
 declare module "fastify" {
   interface FastifyInstance {
@@ -26,7 +27,14 @@ export function createPrismaClient(): PrismaClient {
 export async function registerPrisma(app: FastifyInstance): Promise<void> {
   const prisma = createPrismaClient();
 
-  await prisma.$connect();
+  writeStartupLog("postgres.connect.start");
+  try {
+    await prisma.$connect();
+  } catch (error: unknown) {
+    writeStartupLog("postgres.connect.failure", safeStartupError(error));
+    throw error;
+  }
+  writeStartupLog("postgres.connect.success");
   app.decorate("prisma", prisma);
 
   app.addHook("onClose", async () => {

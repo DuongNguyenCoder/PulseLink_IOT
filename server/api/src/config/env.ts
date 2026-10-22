@@ -1,5 +1,6 @@
 import "dotenv/config";
 import { z } from "zod";
+import { writeStartupLog } from "./startup-log.js";
 
 const envSchema = z.object({
   NODE_ENV: z
@@ -65,6 +66,7 @@ if (!parsed.success) {
     path: issue.path.join("."),
     message: issue.message,
   }));
+  writeStartupLog("configuration.invalid", { details });
   throw new Error(
     `Invalid environment configuration: ${JSON.stringify(details)}`,
   );

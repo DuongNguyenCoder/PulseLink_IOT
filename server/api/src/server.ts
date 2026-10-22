@@ -2,6 +2,7 @@ import { env } from "./config/env.js";
 import { createRuntimeOptions } from "./config/runtime.js";
 import { buildApp } from "./app.js";
 import { getSafeErrorLogFields } from "./shared/logging.js";
+import { safeStartupError, writeStartupLog } from "./config/startup-log.js";
 
 async function main(): Promise<void> {
   let app: Awaited<ReturnType<typeof buildApp>> | undefined;
@@ -35,6 +36,7 @@ async function main(): Promise<void> {
 
     await app.listen({ host: env.HOST, port: env.PORT });
   } catch (error: unknown) {
+    writeStartupLog("runtime.startup.failure", safeStartupError(error));
     if (app) {
       app.log.error(
         getSafeErrorLogFields(error),
