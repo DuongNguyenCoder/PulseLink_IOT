@@ -4,6 +4,7 @@ import { SmtpEmailSender, unavailableEmailSender, } from "../modules/auth/email-
 import { InMemoryRateLimiter, withRateLimiterTimeout, } from "../modules/auth/in-memory-rate-limiter.js";
 import { createClient } from "redis";
 import { RedisRateLimiter } from "../modules/auth/redis-rate-limiter.js";
+import { normalizePem } from "./pem.js";
 function required(name, value) {
     if (value === undefined || value.trim() === "")
         throw new Error(`Missing required configuration: ${name}`);
@@ -24,8 +25,8 @@ function decodeKey(name, value) {
 }
 async function loadJwtKeys() {
     const kid = required("JWT_KEY_ID", env.JWT_KEY_ID);
-    const privateKeyPem = required("JWT_SIGNING_KEY_PEM", env.JWT_SIGNING_KEY_PEM).replaceAll("\\n", "\n");
-    const publicKeyPem = required("JWT_VERIFICATION_KEY_PEM", env.JWT_VERIFICATION_KEY_PEM).replaceAll("\\n", "\n");
+    const privateKeyPem = normalizePem(required("JWT_SIGNING_KEY_PEM", env.JWT_SIGNING_KEY_PEM));
+    const publicKeyPem = normalizePem(required("JWT_VERIFICATION_KEY_PEM", env.JWT_VERIFICATION_KEY_PEM));
     await importPKCS8(privateKeyPem, "RS256");
     const verificationKey = await importSPKI(publicKeyPem, "RS256");
     return {
