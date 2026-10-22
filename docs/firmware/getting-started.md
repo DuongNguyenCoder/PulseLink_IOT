@@ -74,12 +74,36 @@ rõ ràng, dùng `idf.py -p COM7 monitor -B 115200`.
 
 Firmware không tự động ghi eFuse, bật Secure Boot hoặc flash encryption.
 
-Hardware verification cần xác nhận: debounce một lần nhấn, mất Wi-Fi rồi gửi
-lại cùng `eventId`, reboot khi NVS còn event, queue đầy, TLS certificate và
-response `200`/`201`/`401`/`409`.
+Hardware verification cần xác nhận: debounce 50 ms và cooldown 5 giây cho một
+lần nhấn, mất Wi-Fi rồi gửi lại cùng `eventId`, reboot khi NVS còn event, queue
+đầy, TLS certificate và response `200`/`201`/`401`/`409`.
 
 ## Quy tắc ghi nhận kết quả
 
 - `BUILD_PASS`: chỉ được ghi sau khi `idf.py build` thực sự chạy.
 - `FLASH_NOT_RUN`: chưa có bằng chứng board đã được flash trong môi trường này.
 - `HARDWARE_TEST_PENDING`: chưa xác minh carrier board, LED, button hoặc COM.
+
+## WP09 validation record
+
+Automated checks completed on 2026-10-18:
+
+- `idf.py --version`: `PASS` — ESP-IDF `v5.5.5`.
+- `idf.py build`: `PASS` — target `esp32s3`, firmware binary generated, no
+  compiler warning after GPIO guard hardening.
+- TLS configuration review: `PASS` — event endpoint requires `https://` and
+  uses the ESP-IDF certificate bundle; no insecure fallback is present.
+- NVS queue/error-path review: `PASS` — failed queue cleanup or `BLOCKED`
+  persistence restores the in-memory record and retries.
+
+Hardware checks are not evidence-complete in this environment:
+
+- `NOT RUN — HARDWARE REQUIRED`: flash/serial boot, one-press and 5-second
+  cooldown, long press, contact bounce, queue-full LED, NVS reboot/power-loss,
+  Wi-Fi recovery, HTTPS/TLS handshake, and end-to-end event delivery.
+- Board carrier, button wiring, LED type, and COM port remain unverified. Do
+  not treat a locally configured GPIO as proof of the physical wiring.
+
+The build also reports the app partition is nearly full, with approximately
+3% free space remaining. This is a capacity risk for future firmware growth,
+not a hardware validation pass.

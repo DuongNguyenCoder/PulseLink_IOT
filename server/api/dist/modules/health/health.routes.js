@@ -1,6 +1,18 @@
+import { timingSafeEqual } from "node:crypto";
 import { getSafeErrorLogFields } from "../../shared/logging.js";
 import { PrismaNotificationJobRepository } from "../notifications/notification-repository.js";
-export const healthRoutes = async (app) => {
+function hasDiagnosticsAccess(request, expected) {
+    if (expected === undefined)
+        return true;
+    const provided = request.headers["x-health-diagnostics-token"];
+    if (typeof provided !== "string")
+        return false;
+    const actualBuffer = Buffer.from(provided);
+    const expectedBuffer = Buffer.from(expected);
+    return (actualBuffer.length === expectedBuffer.length &&
+        timingSafeEqual(actualBuffer, expectedBuffer));
+}
+export const healthRoutes = async (app, options) => {
     // Liveness: process is running. This endpoint intentionally does not query the database.
     app.get("/live", async () => ({
         status: "ok",
@@ -29,6 +41,13 @@ export const healthRoutes = async (app) => {
         }
     });
     app.get("/notifications", async (request, reply) => {
+        if (!hasDiagnosticsAccess(request, options.diagnosticsToken)) {
+            return reply.code(401).send({
+                status: "error",
+                service: "pulselink-api",
+                error: "Unauthorized",
+            });
+        }
         try {
             const now = new Date();
             const snapshot = await new PrismaNotificationJobRepository(app.prisma).getQueueSnapshot(now);

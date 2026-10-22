@@ -17,10 +17,12 @@ UUID v4 created once for a physical button press and reused for every retry.
 ## Firmware flow
 
 The button task polls the configured active-low GPIO every 10 ms and accepts a
-press only after 50 ms of stable state. It writes the event to a bounded,
-versioned NVS blob before waking the sender task. The sender task waits for
-Wi-Fi, sends HTTPS with the ESP-IDF certificate bundle, and removes the record
-only after HTTP `200` or `201`.
+press only after 50 ms of stable state. After an event is successfully written
+to NVS, further accepted presses are suppressed for 5 seconds. This cooldown
+prevents repeated button presses from creating multiple events in a short
+window; a failed NVS write does not start the cooldown. The sender task waits
+for Wi-Fi, sends HTTPS with the ESP-IDF certificate bundle, and removes the
+record only after HTTP `200` or `201`.
 
 Timeouts, connection failures, `429`, and `5xx` responses retain the record and
 retry with exponential backoff and jitter. `400`, `401`, `403`, and `409` are
@@ -31,7 +33,10 @@ exactly once.
 
 The queue holds eight records. When full, a new press is rejected with a visible
 error and existing records are not overwritten. NVS write/commit failure does
-not acknowledge the press as queued. NVS recovery never erases storage
+not acknowledge the press as queued. A successful HTTP response removes a
+record only after the queue update is committed; if that cleanup or a
+`BLOCKED` state update fails, the in-memory record is restored and the sender
+retries instead of silently dropping it. NVS recovery never erases storage
 automatically.
 
 The current firmware does not yet configure an SNTP server. Until the device

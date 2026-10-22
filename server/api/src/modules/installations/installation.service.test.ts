@@ -1,10 +1,27 @@
-import { randomBytes } from 'node:crypto';
-import { describe, expect, it } from 'vitest';
-import { registerInstallation, revokeInstallation, type InstallationDatabase } from './installation.service.js';
-import type { FcmKeyMaterial } from './fcm-crypto.js';
+import { randomBytes } from "node:crypto";
+import { describe, expect, it } from "vitest";
+import {
+  registerInstallationInTransaction,
+  registerInstallation,
+  revokeInstallation,
+  type InstallationDatabase,
+} from "./installation.service.js";
+import type { FcmKeyMaterial } from "./fcm-crypto.js";
 
-const keys: FcmKeyMaterial = { activeVersion: 1, encryptionKeys: new Map([[1, randomBytes(32)]]), fingerprintKey: randomBytes(32) };
-const record = { id: 'i1', accountId: 'a1', platform: 'ANDROID' as const, status: 'ACTIVE' as const, lastSeenAt: null, revokedAt: null, revokeReason: null };
+const keys: FcmKeyMaterial = {
+  activeVersion: 1,
+  encryptionKeys: new Map([[1, randomBytes(32)]]),
+  fingerprintKey: randomBytes(32),
+};
+const record = {
+  id: "i1",
+  accountId: "a1",
+  platform: "ANDROID" as const,
+  status: "ACTIVE" as const,
+  lastSeenAt: null,
+  revokedAt: null,
+  revokeReason: null,
+};
 
 function fakeDatabase(): InstallationDatabase {
   return {
@@ -22,14 +39,19 @@ function fakeDatabase(): InstallationDatabase {
   };
 }
 
-describe('installation service', () => {
-  it('does not return or persist plaintext token through the public record', async () => {
-    const installation = await registerInstallation(fakeDatabase(), 'a1', { installationId: 'i1', platform: 'ANDROID', fcmToken: 'secret-token' }, keys);
-    expect(installation).not.toHaveProperty('fcmToken');
-    expect(installation).not.toHaveProperty('fcmTokenCiphertext');
+describe("installation service", () => {
+  it("does not return or persist plaintext token through the public record", async () => {
+    const installation = await registerInstallation(
+      fakeDatabase(),
+      "a1",
+      { installationId: "i1", platform: "ANDROID", fcmToken: "secret-token" },
+      keys,
+    );
+    expect(installation).not.toHaveProperty("fcmToken");
+    expect(installation).not.toHaveProperty("fcmTokenCiphertext");
   });
 
-  it('revokes installation and linked sessions in one transaction', async () => {
+  it("revokes installation and linked sessions in one transaction", async () => {
     let transactionCalled = false;
     const db = fakeDatabase();
     db.appInstallation.findUnique = async () => record;
@@ -37,7 +59,78 @@ describe('installation service', () => {
       transactionCalled = true;
       return callback(db);
     };
-    await revokeInstallation(db, 'a1', 'i1');
+    await revokeInstallation(db, "a1", "i1");
     expect(transactionCalled).toBe(true);
+  });
+
+  it("rejects rebinding a token already owned by another account", async () => {
+    const db = fakeDatabase();
+    db.appInstallation.findFirst = async () => ({
+      ...record,
+      accountId: "account-2",
+    });
+    db.$transaction = async (callback) => callback(db);
+
+    await expect(
+      registerInstallation(
+        db,
+        "a1",
+        {
+          installationId: "i1",
+          platform: "ANDROID",
+          fcmToken: "already-owned-token",
+        },
+        keys,
+      ),
+    ).rejects.toMatchObject({ statusCode: 409 });
+  });
+
+  it("creates an installation without token material", async () => {
+    let createArgs: unknown;
+    const db = fakeDatabase();
+    db.appInstallation.create = async (args) => {
+      createArgs = args;
+      return record;
+    };
+
+    await registerInstallationInTransaction(
+      db,
+      "a1",
+      { installationId: "i1", platform: "ANDROID" },
+      undefined,
+    );
+
+    expect(createArgs).toMatchObject({
+      data: {
+        id: "i1",
+        accountId: "a1",
+        platform: "ANDROID",
+      },
+    });
+    expect(createArgs).not.toHaveProperty("data.fcmTokenCiphertext");
+    expect(createArgs).not.toHaveProperty("data.fcmTokenFingerprint");
+    expect(createArgs).not.toHaveProperty("data.fcmTokenKeyVersion");
+  });
+
+  it("preserves existing token material when updating without a token", async () => {
+    let updateArgs: unknown;
+    const db = fakeDatabase();
+    db.appInstallation.findUnique = async () => record;
+    db.appInstallation.update = async (args) => {
+      updateArgs = args;
+      return record;
+    };
+
+    await registerInstallationInTransaction(
+      db,
+      "a1",
+      { installationId: "i1", platform: "ANDROID" },
+      undefined,
+    );
+
+    expect(updateArgs).toMatchObject({ data: { platform: "ANDROID" } });
+    expect(updateArgs).not.toHaveProperty("data.fcmTokenCiphertext");
+    expect(updateArgs).not.toHaveProperty("data.fcmTokenFingerprint");
+    expect(updateArgs).not.toHaveProperty("data.fcmTokenKeyVersion");
   });
 });

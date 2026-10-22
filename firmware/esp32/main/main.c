@@ -36,6 +36,8 @@ static uint32_t s_disconnect_count;
 #define EVENT_PAYLOAD_LENGTH 128U
 #define HTTP_RESPONSE_LIMIT 256U
 #define HTTP_TIMEOUT_MS 5000
+#define BUTTON_STABLE_MS 50U
+#define BUTTON_DEBOUNCE_MS 5000U
 
 typedef enum { EVENT_SLOT_EMPTY = 0, EVENT_SLOT_PENDING = 1, EVENT_SLOT_BLOCKED = 2 } event_slot_state_t;
 typedef struct {
@@ -268,20 +270,32 @@ static esp_err_t send_event(const queued_event_t *event, int *status_code) {
     return err;
 }
 
-static void mark_event_sent(int slot) {
-    if (xSemaphoreTake(s_queue_mutex, pdMS_TO_TICKS(100)) != pdTRUE) return;
+static bool mark_event_sent(int slot) {
+    if (xSemaphoreTake(s_queue_mutex, pdMS_TO_TICKS(100)) != pdTRUE) return false;
+    queued_event_t previous = s_event_queue.events[slot];
     memset(&s_event_queue.events[slot], 0, sizeof(s_event_queue.events[slot]));
     esp_err_t err = queue_save_locked();
+    if (err != ESP_OK) s_event_queue.events[slot] = previous;
     xSemaphoreGive(s_queue_mutex);
-    if (err != ESP_OK) ESP_LOGE(TAG, "event acknowledgement cleanup failed: %s", esp_err_to_name(err));
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "event acknowledgement cleanup failed; event retained: %s", esp_err_to_name(err));
+        return false;
+    }
+    return true;
 }
 
-static void block_event(int slot) {
-    if (xSemaphoreTake(s_queue_mutex, pdMS_TO_TICKS(100)) != pdTRUE) return;
+static bool block_event(int slot) {
+    if (xSemaphoreTake(s_queue_mutex, pdMS_TO_TICKS(100)) != pdTRUE) return false;
+    queued_event_t previous = s_event_queue.events[slot];
     s_event_queue.events[slot].state = EVENT_SLOT_BLOCKED;
     esp_err_t err = queue_save_locked();
+    if (err != ESP_OK) s_event_queue.events[slot] = previous;
     xSemaphoreGive(s_queue_mutex);
-    if (err != ESP_OK) ESP_LOGE(TAG, "event block state save failed: %s", esp_err_to_name(err));
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "event block state save failed; event retained as pending: %s", esp_err_to_name(err));
+        return false;
+    }
+    return true;
 }
 
 static void event_sender_task(void *arg) {
@@ -300,15 +314,23 @@ static void event_sender_task(void *arg) {
         int status_code = 0;
         esp_err_t err = send_event(&event, &status_code);
         if (err == ESP_OK && (status_code == 200 || status_code == 201)) {
-            mark_event_sent(slot);
-            backoff_ms = 1000U;
-            set_led(true);
+            if (mark_event_sent(slot)) {
+                backoff_ms = 1000U;
+                set_led(true);
+                continue;
+            }
+            vTaskDelay(pdMS_TO_TICKS(backoff_ms + (esp_random() % 500U)));
+            if (backoff_ms < 30000U) backoff_ms *= 2U;
             continue;
         }
         if (err == ESP_OK && (status_code == 400 || status_code == 401 || status_code == 403 || status_code == 409)) {
-            ESP_LOGE(TAG, "event rejected status=%d slot=%d; retained as blocked", status_code, slot);
-            block_event(slot);
-            set_led_error();
+            if (block_event(slot)) {
+                ESP_LOGE(TAG, "event rejected status=%d slot=%d; retained as blocked", status_code, slot);
+                set_led_error();
+            } else {
+                vTaskDelay(pdMS_TO_TICKS(backoff_ms + (esp_random() % 500U)));
+                if (backoff_ms < 30000U) backoff_ms *= 2U;
+            }
             continue;
         }
         ESP_LOGW(TAG, "event temporary failure status=%d err=%s; retrying", status_code, esp_err_to_name(err));
@@ -322,12 +344,20 @@ static void button_task(void *arg) {
     bool last_raw = gpio_get_level(CONFIG_PULSELINK_BUTTON_GPIO) == 0;
     bool stable = last_raw;
     TickType_t changed_at = xTaskGetTickCount();
+    TickType_t last_accepted_press_at = 0;
+    bool has_accepted_press = false;
     while (true) {
         bool raw = gpio_get_level(CONFIG_PULSELINK_BUTTON_GPIO) == 0;
         if (raw != last_raw) { last_raw = raw; changed_at = xTaskGetTickCount(); }
-        if (raw != stable && (xTaskGetTickCount() - changed_at) >= pdMS_TO_TICKS(50)) {
+        TickType_t now = xTaskGetTickCount();
+        if (raw != stable && (now - changed_at) >= pdMS_TO_TICKS(BUTTON_STABLE_MS)) {
             stable = raw;
-            if (stable) enqueue_button_event();
+            if (stable && (!has_accepted_press || (now - last_accepted_press_at) >= pdMS_TO_TICKS(BUTTON_DEBOUNCE_MS))) {
+                if (enqueue_button_event()) {
+                    last_accepted_press_at = now;
+                    has_accepted_press = true;
+                }
+            }
         }
         vTaskDelay(pdMS_TO_TICKS(10));
     }
@@ -410,18 +440,22 @@ void app_main(void) {
         ESP_LOGE(TAG, "persistent event queue unavailable; refusing event capture");
         return;
     }
-    if (CONFIG_PULSELINK_STATUS_LED_GPIO >= 0) {
+#if CONFIG_PULSELINK_STATUS_LED_GPIO >= 0
+    {
         gpio_config_t led = { .pin_bit_mask = 1ULL << CONFIG_PULSELINK_STATUS_LED_GPIO, .mode = GPIO_MODE_OUTPUT };
         ESP_ERROR_CHECK(gpio_config(&led));
         set_led(false);
     }
-    if (CONFIG_PULSELINK_BUTTON_GPIO >= 0) {
+#endif
+#if CONFIG_PULSELINK_BUTTON_GPIO >= 0
+    {
         gpio_config_t button = { .pin_bit_mask = 1ULL << CONFIG_PULSELINK_BUTTON_GPIO, .mode = GPIO_MODE_INPUT, .pull_up_en = GPIO_PULLUP_ENABLE, .pull_down_en = GPIO_PULLDOWN_DISABLE, .intr_type = GPIO_INTR_DISABLE };
         ESP_ERROR_CHECK(gpio_config(&button));
         xTaskCreate(button_task, "button", 3072, NULL, 5, NULL);
-    } else {
-        ESP_LOGW(TAG, "button GPIO is unconfigured; event capture is disabled");
     }
+#else
+    ESP_LOGW(TAG, "button GPIO is unconfigured; event capture is disabled");
+#endif
     ESP_LOGI(TAG, "PulseLink firmware %s queue_capacity=%u", CONFIG_PULSELINK_FIRMWARE_VERSION, EVENT_QUEUE_MAX);
     if (wifi_start() != ESP_OK) ESP_LOGW(TAG, "Wi-Fi is not started; queued events remain in NVS");
 }

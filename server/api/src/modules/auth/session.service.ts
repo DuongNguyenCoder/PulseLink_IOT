@@ -52,8 +52,8 @@ export interface CreatedSession {
   absoluteExpiresAt: Date;
 }
 
-export async function createSession(
-  database: SessionDatabase,
+export async function createSessionInTransaction(
+  transaction: SessionTransaction,
   input: { sessionId: string; accountId: string; appInstallationId: string },
   now: Date = new Date(),
 ): Promise<CreatedSession> {
@@ -61,19 +61,17 @@ export async function createSession(
   const idleExpiresAt = new Date(now.getTime() + SESSION_IDLE_TTL_MS);
   const absoluteExpiresAt = new Date(now.getTime() + SESSION_ABSOLUTE_TTL_MS);
 
-  await database.$transaction(async (transaction) => {
-    await transaction.session.create({
-      data: {
-        id: input.sessionId,
-        accountId: input.accountId,
-        appInstallationId: input.appInstallationId,
-        refreshTokenHash: refreshToken.verifier,
-        tokenFamilyId: generateTokenFamilyId(),
-        generation: 0,
-        idleExpiresAt,
-        absoluteExpiresAt,
-      },
-    });
+  await transaction.session.create({
+    data: {
+      id: input.sessionId,
+      accountId: input.accountId,
+      appInstallationId: input.appInstallationId,
+      refreshTokenHash: refreshToken.verifier,
+      tokenFamilyId: generateTokenFamilyId(),
+      generation: 0,
+      idleExpiresAt,
+      absoluteExpiresAt,
+    },
   });
 
   return {
@@ -82,6 +80,16 @@ export async function createSession(
     idleExpiresAt,
     absoluteExpiresAt,
   };
+}
+
+export async function createSession(
+  database: SessionDatabase,
+  input: { sessionId: string; accountId: string; appInstallationId: string },
+  now: Date = new Date(),
+): Promise<CreatedSession> {
+  return database.$transaction((transaction) =>
+    createSessionInTransaction(transaction, input, now),
+  );
 }
 
 export async function rotateRefreshSession(

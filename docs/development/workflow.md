@@ -5,6 +5,8 @@
   `node --version` and `npm --version`.
 - Docker Desktop with Docker Compose when running database-backed integration
   checks.
+- Redis is required for distributed login-limiter integration checks; the
+  repository test compose file provisions an isolated loopback service.
 - ESP-IDF PowerShell with ESP-IDF `v5.5.5` on `PATH` for firmware builds.
 - Dependencies already installed. The baseline scripts do not install
   dependencies or change system environment state.
@@ -47,6 +49,22 @@ To run the repeatable non-destructive backend checks from the repository root:
 
 The wrapper exits non-zero when an executed check fails. It exits with code 2
 when all configured checks pass but an expected check is not configured.
+
+## Redis rate-limit integration
+
+From the repository root, start only the isolated Redis test service:
+
+```powershell
+$env:POSTGRES_TEST_PASSWORD="isolated-test-only"
+docker compose -f infrastructure/docker/compose.test.yaml up -d redis-test
+```
+
+From `server/api`, run the Redis integration test with
+`PULSELINK_REDIS_INTEGRATION_TESTS=1` and
+`REDIS_TEST_URL=redis://127.0.0.1:6380`. Production must use a managed TLS
+Redis URL, `LOGIN_RATE_LIMIT_BACKEND=redis`, a unique namespace and a
+secret-manager-provided HMAC key. Never place those production values in
+source or documentation.
 
 ## Firmware build
 

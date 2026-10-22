@@ -3,6 +3,7 @@ import { createFirebaseSender } from "./modules/notifications/fcm.client.js";
 import { PrismaNotificationJobRepository } from "./modules/notifications/notification-repository.js";
 import { NotificationWorker } from "./modules/notifications/notification-worker.js";
 import { createPrismaClient } from "./plugins/prisma.js";
+import { getSafeErrorLogFields } from "./shared/logging.js";
 
 async function main(): Promise<void> {
   const prisma = createPrismaClient();
@@ -83,14 +84,10 @@ async function main(): Promise<void> {
     loggerHost.log.info({ signal }, "Notification worker shutting down");
 
     void shutdown().catch((error: unknown) => {
-      process.stderr.write(
-        `Worker shutdown failed: ${
-          error instanceof Error
-            ? (error.stack ?? error.message)
-            : String(error)
-        }\n`,
+      loggerHost.log.error(
+        getSafeErrorLogFields(error),
+        "Worker shutdown failed",
       );
-
       process.exitCode = 1;
     });
   };
@@ -120,17 +117,17 @@ async function main(): Promise<void> {
     ready = true;
 
     await workerRunPromise;
+  } catch (error: unknown) {
+    loggerHost.log.error(
+      getSafeErrorLogFields(error),
+      "Notification worker stopped",
+    );
+    process.exitCode = 1;
   } finally {
     await shutdown();
   }
 }
 
-void main().catch((error: unknown) => {
-  process.stderr.write(
-    `Notification worker stopped: ${
-      error instanceof Error ? (error.stack ?? error.message) : String(error)
-    }\n`,
-  );
-
+void main().catch(() => {
   process.exitCode = 1;
 });

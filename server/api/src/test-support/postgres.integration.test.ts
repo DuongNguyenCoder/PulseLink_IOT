@@ -6,15 +6,21 @@ import {
   randomUUID,
   sign,
 } from "node:crypto";
+import { exportPKCS8 } from "jose";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { PrismaClient } from "../generated/prisma/client.js";
 import { assertIntegrationDatabaseEnvironment } from "./integration-db-guard.js";
+import {
+  authenticateWithInstallation,
+  type AuthenticationBootstrapDatabase,
+} from "../modules/auth/authentication-bootstrap.service.js";
 import {
   createSession,
   rotateRefreshSession,
   type SessionDatabase,
 } from "../modules/auth/session.service.js";
 import {
+  cleanupPendingSignup,
   consumePasswordResetToken,
   consumeVerificationToken,
   issuePasswordResetToken,
@@ -40,6 +46,7 @@ import {
   canonicalProvisioningPayload,
   hashDeviceToken,
 } from "../modules/provisioning/provisioning-crypto.js";
+import { hashRefreshToken } from "../modules/auth/session-tokens.js";
 import {
   createProvisioningSession,
   enrollDevice,
@@ -243,6 +250,228 @@ integrationDescribe("PostgreSQL schema and session integration", () => {
         },
       }),
     ).rejects.toMatchObject({ code: "P2003" });
+  });
+
+  it("creates a tokenless installation and bound session on PostgreSQL", async () => {
+    const accountId = await createAccount();
+    const installationId = randomUUID();
+    installationIds.add(installationId);
+    const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+    const result = await authenticateWithInstallation(
+      prisma as unknown as AuthenticationBootstrapDatabase,
+      { id: accountId, authVersion: 0 },
+      { installationId, platform: "ANDROID" },
+      undefined,
+      { kid: "integration-key", privateKeyPem: await exportPKCS8(privateKey) },
+    );
+
+    const installation = await prisma.appInstallation.findUniqueOrThrow({
+      where: { id: installationId },
+      select: {
+        accountId: true,
+        fcmTokenCiphertext: true,
+        fcmTokenFingerprint: true,
+        fcmTokenKeyVersion: true,
+      },
+    });
+    expect(installation).toMatchObject({
+      accountId,
+      fcmTokenCiphertext: null,
+      fcmTokenFingerprint: null,
+      fcmTokenKeyVersion: null,
+    });
+    await expect(
+      prisma.session.findUnique({ where: { id: result.session.sessionId } }),
+    ).resolves.toMatchObject({ accountId, appInstallationId: installationId });
+
+    await registerInstallation(
+      prisma as never,
+      accountId,
+      {
+        installationId,
+        platform: "ANDROID",
+        fcmToken: `after-login-${randomUUID()}`,
+      },
+      fcmKeys,
+    );
+    await expect(
+      prisma.appInstallation.findUnique({
+        where: { id: installationId },
+        select: { fcmTokenCiphertext: true, fcmTokenFingerprint: true },
+      }),
+    ).resolves.toMatchObject({
+      fcmTokenCiphertext: expect.any(String),
+      fcmTokenFingerprint: expect.any(String),
+    });
+  });
+
+  it("verifies nullable FCM columns and the required Session installation key", async () => {
+    const columns = await prisma.$queryRaw<
+      Array<{ column_name: string; is_nullable: string }>
+    >`
+      SELECT column_name, is_nullable
+      FROM information_schema.columns
+      WHERE table_schema = 'public'
+        AND table_name = 'AppInstallation'
+        AND column_name IN ('fcmTokenCiphertext', 'fcmTokenFingerprint', 'fcmTokenKeyVersion')
+      ORDER BY column_name
+    `;
+    expect(columns).toHaveLength(3);
+    expect(columns.every((column) => column.is_nullable === "YES")).toBe(true);
+
+    const sessionColumn = await prisma.$queryRaw<
+      Array<{ is_nullable: string }>
+    >`
+      SELECT is_nullable
+      FROM information_schema.columns
+      WHERE table_schema = 'public'
+        AND table_name = 'Session'
+        AND column_name = 'appInstallationId'
+    `;
+    expect(sessionColumn).toEqual([{ is_nullable: "NO" }]);
+  });
+
+  it("preserves token material when an active installation logs in without a token", async () => {
+    const accountId = await createAccount();
+    const installationId = randomUUID();
+    installationIds.add(installationId);
+    const token = `preserve-${randomUUID()}`;
+    await registerInstallation(
+      prisma as never,
+      accountId,
+      { installationId, platform: "ANDROID", fcmToken: token },
+      fcmKeys,
+    );
+    const before = await prisma.appInstallation.findUniqueOrThrow({
+      where: { id: installationId },
+      select: {
+        fcmTokenCiphertext: true,
+        fcmTokenFingerprint: true,
+        fcmTokenKeyVersion: true,
+      },
+    });
+    const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+    await authenticateWithInstallation(
+      prisma as unknown as AuthenticationBootstrapDatabase,
+      { id: accountId, authVersion: 0 },
+      { installationId, platform: "ANDROID" },
+      fcmKeys,
+      { kid: "integration-key", privateKeyPem: await exportPKCS8(privateKey) },
+    );
+    const after = await prisma.appInstallation.findUniqueOrThrow({
+      where: { id: installationId },
+      select: {
+        fcmTokenCiphertext: true,
+        fcmTokenFingerprint: true,
+        fcmTokenKeyVersion: true,
+      },
+    });
+    expect(after).toEqual(before);
+  });
+
+  it("rolls back an installation when the bound session write fails", async () => {
+    const accountId = await createAccount();
+    const installationId = randomUUID();
+    installationIds.add(installationId);
+    await expect(
+      prisma.$transaction(async (tx) => {
+        await tx.appInstallation.create({
+          data: { id: installationId, accountId, platform: "ANDROID" },
+        });
+        await tx.session.create({
+          data: {
+            accountId: randomUUID(),
+            appInstallationId: installationId,
+            refreshTokenHash: randomUUID().replaceAll("-", ""),
+            tokenFamilyId: randomUUID().replaceAll("-", ""),
+            idleExpiresAt: new Date(Date.now() + 86_400_000),
+            absoluteExpiresAt: new Date(Date.now() + 86_400_000),
+          },
+        });
+      }),
+    ).rejects.toMatchObject({ code: "P2003" });
+    await expect(
+      prisma.appInstallation.findUnique({ where: { id: installationId } }),
+    ).resolves.toBeNull();
+  });
+
+  it("keeps concurrent tokenless login retries consistent", async () => {
+    const accountId = await createAccount();
+    const installationId = randomUUID();
+    installationIds.add(installationId);
+    const attempts = await Promise.allSettled(
+      [1, 2].map(async () => {
+        const { privateKey } = generateKeyPairSync("rsa", {
+          modulusLength: 2048,
+        });
+        return authenticateWithInstallation(
+          prisma as unknown as AuthenticationBootstrapDatabase,
+          { id: accountId, authVersion: 0 },
+          { installationId, platform: "ANDROID" },
+          undefined,
+          {
+            kid: "integration-key",
+            privateKeyPem: await exportPKCS8(privateKey),
+          },
+        );
+      }),
+    );
+    expect(
+      attempts.filter((attempt) => attempt.status === "fulfilled"),
+    ).toHaveLength(1);
+    expect(
+      attempts.filter((attempt) => attempt.status === "rejected"),
+    ).toHaveLength(1);
+    const sessions = await prisma.session.findMany({
+      where: { accountId, appInstallationId: installationId },
+    });
+    expect(sessions).toHaveLength(1);
+    await expect(
+      prisma.appInstallation.findUnique({ where: { id: installationId } }),
+    ).resolves.toMatchObject({ accountId, status: "ACTIVE" });
+  });
+
+  it("keeps concurrent updates on one installation internally consistent", async () => {
+    const accountId = await createAccount();
+    const installationId = randomUUID();
+    installationIds.add(installationId);
+    await registerInstallation(
+      prisma as never,
+      accountId,
+      {
+        installationId,
+        platform: "ANDROID",
+        fcmToken: `initial-${randomUUID()}`,
+      },
+      fcmKeys,
+    );
+    const results = await Promise.allSettled(
+      [1, 2, 3, 4, 5].map((index) =>
+        registerInstallation(
+          prisma as never,
+          accountId,
+          {
+            installationId,
+            platform: index % 2 === 0 ? "IOS" : "ANDROID",
+            fcmToken: `concurrent-update-${randomUUID()}`,
+          },
+          fcmKeys,
+        ),
+      ),
+    );
+    expect(results.every((result) => result.status === "fulfilled")).toBe(true);
+    const final = await prisma.appInstallation.findUniqueOrThrow({
+      where: { id: installationId },
+      select: {
+        platform: true,
+        fcmTokenCiphertext: true,
+        fcmTokenFingerprint: true,
+        fcmTokenKeyVersion: true,
+      },
+    });
+    expect(final.fcmTokenCiphertext).not.toBeNull();
+    expect(final.fcmTokenFingerprint).not.toBeNull();
+    expect(final.fcmTokenKeyVersion).toBe(1);
   });
 
   it("persists one event when concurrent requests reuse the same eventId", async () => {
@@ -969,6 +1198,225 @@ integrationDescribe("PostgreSQL schema and session integration", () => {
     expect(audits).toHaveLength(1);
   });
 
+  it("revokes the previous reset token and stores only a hash with a 15-minute TTL", async () => {
+    const accountId = await createAccount();
+    const account = await prisma.account.findUniqueOrThrow({
+      where: { id: accountId },
+    });
+    const issuedAt = new Date("2026-01-01T00:00:00.000Z");
+
+    const first = await issuePasswordResetToken(
+      prisma as unknown as AccountPersistence,
+      account.emailNormalized,
+      issuedAt,
+    );
+    const second = await issuePasswordResetToken(
+      prisma as unknown as AccountPersistence,
+      account.emailNormalized,
+      new Date("2026-01-01T00:01:00.000Z"),
+    );
+    expect(first).not.toBeNull();
+    expect(second).not.toBeNull();
+    if (first === null || second === null) return;
+
+    const rows = await prisma.accountToken.findMany({
+      where: { accountId, purpose: "PASSWORD_RESET" },
+      orderBy: { createdAt: "asc" },
+    });
+    expect(rows).toHaveLength(2);
+    expect(rows[0]?.revokedAt).not.toBeNull();
+    expect(rows[1]?.revokedAt).toBeNull();
+    expect(rows[1]?.expiresAt).toEqual(new Date("2026-01-01T00:16:00.000Z"));
+    expect(rows[1]?.tokenHash).toBe(hashRefreshToken(second.token.plaintext));
+    expect(rows[1]?.tokenHash).not.toBe(second.token.plaintext);
+  });
+
+  it("rolls back reset-token revocation when replacement creation fails", async () => {
+    const accountId = await createAccount();
+    const account = await prisma.account.findUniqueOrThrow({
+      where: { id: accountId },
+    });
+    const existing = await issuePasswordResetToken(
+      prisma as unknown as AccountPersistence,
+      account.emailNormalized,
+    );
+    expect(existing).not.toBeNull();
+    if (existing === null) return;
+    const existingRow = await prisma.accountToken.findFirstOrThrow({
+      where: { tokenHash: hashRefreshToken(existing.token.plaintext) },
+    });
+
+    const failingPersistence = {
+      $transaction: (callback: (transaction: any) => Promise<unknown>) =>
+        prisma.$transaction(async (transaction) =>
+          callback({
+            ...transaction,
+            account: {
+              ...transaction.account,
+              findUnique: transaction.account.findUnique.bind(
+                transaction.account,
+              ),
+              update: transaction.account.update.bind(transaction.account),
+            },
+            accountToken: {
+              ...transaction.accountToken,
+              updateMany: transaction.accountToken.updateMany.bind(
+                transaction.accountToken,
+              ),
+              create: async () => {
+                throw new Error("controlled integration failure");
+              },
+            },
+          }),
+        ),
+    } as unknown as AccountPersistence;
+
+    await expect(
+      issuePasswordResetToken(failingPersistence, account.emailNormalized),
+    ).rejects.toThrow("controlled integration failure");
+
+    const unchanged = await prisma.accountToken.findUniqueOrThrow({
+      where: { id: existingRow.id },
+    });
+    expect(unchanged.revokedAt).toBeNull();
+  });
+
+  it("serializes concurrent reset issuance for one account", async () => {
+    const accountId = await createAccount();
+    const account = await prisma.account.findUniqueOrThrow({
+      where: { id: accountId },
+    });
+    const results = await Promise.all(
+      [1, 2, 3, 4].map(() =>
+        issuePasswordResetToken(
+          prisma as unknown as AccountPersistence,
+          account.emailNormalized,
+        ),
+      ),
+    );
+    expect(results.every((result) => result !== null)).toBe(true);
+
+    const active = await prisma.accountToken.findMany({
+      where: {
+        accountId,
+        purpose: "PASSWORD_RESET",
+        consumedAt: null,
+        revokedAt: null,
+      },
+    });
+    expect(active).toHaveLength(1);
+  });
+
+  it("cleans only the matching pending signup atomically", async () => {
+    const first = await prisma.account.create({
+      data: {
+        emailNormalized: `${randomUUID()}@integration.test`,
+        passwordHash: "integration-test-hash",
+        status: "PENDING",
+      },
+      select: { id: true },
+    });
+    const second = await prisma.account.create({
+      data: {
+        emailNormalized: `${randomUUID()}@integration.test`,
+        passwordHash: "integration-test-hash",
+        status: "PENDING",
+      },
+      select: { id: true },
+    });
+    accountIds.add(first.id);
+    accountIds.add(second.id);
+    const verification = await issueVerificationToken(
+      prisma as unknown as AccountPersistence,
+      first.id,
+    );
+
+    await expect(
+      cleanupPendingSignup(
+        prisma as unknown as AccountPersistence,
+        first.id,
+        verification.plaintext,
+      ),
+    ).resolves.toBe(true);
+    await expect(
+      prisma.account.findUnique({ where: { id: first.id } }),
+    ).resolves.toBeNull();
+    await expect(
+      prisma.account.findUnique({ where: { id: second.id } }),
+    ).resolves.not.toBeNull();
+  });
+
+  it("does not clean a signup that is no longer pending or unverified", async () => {
+    const accountId = await createAccount();
+    const account = await prisma.account.findUniqueOrThrow({
+      where: { id: accountId },
+    });
+    const verification = await issueVerificationToken(
+      prisma as unknown as AccountPersistence,
+      accountId,
+    );
+
+    await expect(
+      cleanupPendingSignup(
+        prisma as unknown as AccountPersistence,
+        accountId,
+        verification.plaintext,
+      ),
+    ).resolves.toBe(false);
+    await expect(
+      prisma.account.findUnique({ where: { id: accountId } }),
+    ).resolves.not.toBeNull();
+  });
+
+  it("does not race email verification into an unsafe pending-signup delete", async () => {
+    const accountId = await prisma.account
+      .create({
+        data: {
+          emailNormalized: `${randomUUID()}@integration.test`,
+          passwordHash: "integration-test-hash",
+          status: "PENDING",
+        },
+        select: { id: true },
+      })
+      .then((account) => {
+        accountIds.add(account.id);
+        return account.id;
+      });
+    const verification = await issueVerificationToken(
+      prisma as unknown as AccountPersistence,
+      accountId,
+    );
+
+    await Promise.allSettled([
+      cleanupPendingSignup(
+        prisma as unknown as AccountPersistence,
+        accountId,
+        verification.plaintext,
+      ),
+      consumeVerificationToken(
+        prisma as unknown as AccountPersistence,
+        verification.plaintext,
+      ),
+    ]);
+
+    const finalAccount = await prisma.account.findUnique({
+      where: { id: accountId },
+    });
+    if (finalAccount === null) {
+      await expect(
+        prisma.accountToken.findMany({ where: { accountId } }),
+      ).resolves.toHaveLength(0);
+    } else {
+      expect(finalAccount.status).toBe("ACTIVE");
+      expect(finalAccount.emailVerifiedAt).not.toBeNull();
+      await expect(
+        prisma.accountToken.findMany({
+          where: { accountId, consumedAt: { not: null } },
+        }),
+      ).resolves.toHaveLength(1);
+    }
+  });
+
   it("creates, lists, reads and updates a Store through active Owner membership", async () => {
     const accountId = await createAccount();
     const store = await createStoreForOwner(prisma as never, accountId, {
@@ -1067,12 +1515,14 @@ integrationDescribe("PostgreSQL schema and session integration", () => {
       if (result.status === "fulfilled") storeIds.add(result.value.id);
   });
 
-  it("encrypts FCM tokens, rebinds atomically and revokes linked sessions", async () => {
+  it("encrypts FCM tokens, rejects rebinds and revokes linked sessions", async () => {
     const accountA = await createAccount();
     const accountB = await createAccount();
     const installationA = randomUUID();
     const installationB = randomUUID();
     const token = `fcm-${randomUUID()}`;
+    installationIds.add(installationA);
+    installationIds.add(installationB);
     const first = await registerInstallation(
       prisma as never,
       accountA,
@@ -1084,14 +1534,14 @@ integrationDescribe("PostgreSQL schema and session integration", () => {
       accountId: accountA,
       appInstallationId: installationA,
     });
-    const second = await registerInstallation(
-      prisma as never,
-      accountB,
-      { installationId: installationB, platform: "IOS", fcmToken: token },
-      fcmKeys,
-    );
-    installationIds.add(installationA);
-    installationIds.add(installationB);
+    await expect(
+      registerInstallation(
+        prisma as never,
+        accountB,
+        { installationId: installationB, platform: "IOS", fcmToken: token },
+        fcmKeys,
+      ),
+    ).rejects.toMatchObject({ statusCode: 409 });
 
     const stored = await prisma.appInstallation.findUniqueOrThrow({
       where: { id: first.id },
@@ -1099,16 +1549,21 @@ integrationDescribe("PostgreSQL schema and session integration", () => {
     });
     expect(stored.fcmTokenCiphertext).not.toContain(token);
     expect(decryptFcmToken(stored.fcmTokenCiphertext, fcmKeys)).toBe(token);
-    expect(stored.status).toBe("REVOKED");
+    expect(stored.status).toBe("ACTIVE");
     const revokedOldSession = await prisma.session.findUniqueOrThrow({
       where: { id: oldSession.sessionId },
     });
-    expect(revokedOldSession.revokedAt).not.toBeNull();
-    const rebindAudits = await prisma.auditEvent.findMany({
-      where: { resourceId: installationB },
-    });
-    expect(rebindAudits.map((event) => event.action)).toContain(
-      "FCM_TOKEN_REBOUND",
+    expect(revokedOldSession.revokedAt).toBeNull();
+
+    const second = await registerInstallation(
+      prisma as never,
+      accountB,
+      {
+        installationId: installationB,
+        platform: "IOS",
+        fcmToken: `different-${randomUUID()}`,
+      },
+      fcmKeys,
     );
     expect(second.status).toBe("ACTIVE");
 

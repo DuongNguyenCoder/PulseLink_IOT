@@ -3,7 +3,6 @@
 
 // Get a free hosted Postgres database in seconds: `npx create-db`
 
-
 generator client {
   provider = "prisma-client"
   output   = "../src/generated/prisma"
@@ -125,10 +124,10 @@ model Store {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  devices Device[]
-  staff   Staff[]
-  memberships StoreMembership[]
-  auditEvents AuditEvent[]
+  devices              Device[]
+  staff                Staff[]
+  memberships          StoreMembership[]
+  auditEvents          AuditEvent[]
   provisioningSessions ProvisioningSession[]
 
   @@index([isActive])
@@ -173,10 +172,10 @@ model Account {
   createdAt       DateTime      @default(now())
   updatedAt       DateTime      @updatedAt
 
-  installations AppInstallation[]
-  sessions      Session[]
-  memberships   StoreMembership[]
-  tokens        AccountToken[]
+  installations        AppInstallation[]
+  sessions             Session[]
+  memberships          StoreMembership[]
+  tokens               AccountToken[]
   provisioningSessions ProvisioningSession[]
 
   @@index([status])
@@ -192,9 +191,9 @@ model AppInstallation {
   id                  String                @id @default(cuid())
   accountId           String
   platform            PushPlatform
-  fcmTokenCiphertext  String                @db.Text
-  fcmTokenFingerprint String                @db.VarChar(64)
-  fcmTokenKeyVersion  Int
+  fcmTokenCiphertext  String?               @db.Text
+  fcmTokenFingerprint String?               @db.VarChar(64)
+  fcmTokenKeyVersion  Int?
   status              AppInstallationStatus @default(ACTIVE)
   lastSeenAt          DateTime?
   revokedAt           DateTime?
@@ -219,23 +218,23 @@ model AppInstallation {
 // ================================
 
 model Session {
-  id                  String             @id @default(cuid())
-  accountId           String
-  appInstallationId   String
-  refreshTokenHash    String             @unique @db.VarChar(128)
-  tokenFamilyId       String             @db.VarChar(64)
-  generation          Int                @default(0)
-  createdAt           DateTime           @default(now())
-  lastUsedAt          DateTime?
-  idleExpiresAt       DateTime
-  absoluteExpiresAt   DateTime
-  rotatedAt           DateTime?
-  revokedAt           DateTime?
-  revokeReason        SessionRevokeReason?
-  updatedAt           DateTime           @updatedAt
+  id                String               @id @default(cuid())
+  accountId         String
+  appInstallationId String
+  refreshTokenHash  String               @unique @db.VarChar(128)
+  tokenFamilyId     String               @db.VarChar(64)
+  generation        Int                  @default(0)
+  createdAt         DateTime             @default(now())
+  lastUsedAt        DateTime?
+  idleExpiresAt     DateTime
+  absoluteExpiresAt DateTime
+  rotatedAt         DateTime?
+  revokedAt         DateTime?
+  revokeReason      SessionRevokeReason?
+  updatedAt         DateTime             @updatedAt
 
-  account       Account         @relation(fields: [accountId], references: [id], onDelete: Restrict)
-  installation  AppInstallation @relation(fields: [appInstallationId, accountId], references: [id, accountId], onDelete: Restrict)
+  account      Account         @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  installation AppInstallation @relation(fields: [appInstallationId, accountId], references: [id, accountId], onDelete: Restrict)
 
   @@index([accountId, revokedAt])
   @@index([appInstallationId, revokedAt])
@@ -251,14 +250,14 @@ model Session {
 // ================================
 
 model StoreMembership {
-  id         String           @id @default(cuid())
-  accountId  String
-  storeId    String
-  role       MembershipRole
-  status     MembershipStatus @default(ACTIVE)
-  createdAt  DateTime         @default(now())
-  updatedAt  DateTime         @updatedAt
-  revokedAt  DateTime?
+  id        String           @id @default(cuid())
+  accountId String
+  storeId   String
+  role      MembershipRole
+  status    MembershipStatus @default(ACTIVE)
+  createdAt DateTime         @default(now())
+  updatedAt DateTime         @updatedAt
+  revokedAt DateTime?
 
   account Account @relation(fields: [accountId], references: [id], onDelete: Restrict)
   store   Store   @relation(fields: [storeId], references: [id], onDelete: Restrict)
@@ -275,14 +274,14 @@ model StoreMembership {
 // ================================
 
 model AccountToken {
-  id          String              @id @default(cuid())
-  accountId   String
-  purpose     AccountTokenPurpose
-  tokenHash   String              @unique @db.VarChar(128)
-  expiresAt   DateTime
-  consumedAt  DateTime?
-  revokedAt   DateTime?
-  createdAt   DateTime            @default(now())
+  id         String              @id @default(cuid())
+  accountId  String
+  purpose    AccountTokenPurpose
+  tokenHash  String              @unique @db.VarChar(128)
+  expiresAt  DateTime
+  consumedAt DateTime?
+  revokedAt  DateTime?
+  createdAt  DateTime            @default(now())
 
   account Account @relation(fields: [accountId], references: [id], onDelete: Restrict)
 
@@ -296,33 +295,33 @@ model AccountToken {
 // ================================
 
 model Device {
-  id               String       @id @default(cuid())
-  deviceKey        String       @unique @db.VarChar(64)
-  deviceSecretHash String       @db.VarChar(255)
-  name             String       @db.VarChar(120)
-  type             DeviceType   @default(CALL_BUTTON)
-  status           DeviceStatus @default(PENDING)
-  provisioningState DeviceProvisioningState @default(UNREGISTERED)
-  enrollmentStatus  DeviceEnrollmentStatus  @default(UNENROLLED)
-  enrollmentPublicKey String?      @db.Text
+  id                   String                  @id @default(cuid())
+  deviceKey            String                  @unique @db.VarChar(64)
+  deviceSecretHash     String                  @db.VarChar(255)
+  name                 String                  @db.VarChar(120)
+  type                 DeviceType              @default(CALL_BUTTON)
+  status               DeviceStatus            @default(PENDING)
+  provisioningState    DeviceProvisioningState @default(UNREGISTERED)
+  enrollmentStatus     DeviceEnrollmentStatus  @default(UNENROLLED)
+  enrollmentPublicKey  String?                 @db.Text
   enrollmentKeyVersion Int?
-  enrolledAt        DateTime?
-  enrollmentRevokedAt DateTime?
-  firmwareVersion  String?      @db.VarChar(40)
-  lastSeenAt       DateTime?
-  storeId          String
-  createdAt        DateTime     @default(now())
-  updatedAt        DateTime     @updatedAt
+  enrolledAt           DateTime?
+  enrollmentRevokedAt  DateTime?
+  firmwareVersion      String?                 @db.VarChar(40)
+  lastSeenAt           DateTime?
+  storeId              String
+  createdAt            DateTime                @default(now())
+  updatedAt            DateTime                @updatedAt
 
-  store  Store         @relation(fields: [storeId], references: [id], onDelete: Restrict)
-  events DeviceEvent[]
+  store                Store                 @relation(fields: [storeId], references: [id], onDelete: Restrict)
+  events               DeviceEvent[]
   provisioningSessions ProvisioningSession[]
 
+  @@unique([id, storeId])
   @@index([storeId, status])
   @@index([storeId, provisioningState])
   @@index([enrollmentStatus, enrollmentKeyVersion])
   @@index([lastSeenAt])
-  @@unique([id, storeId])
 }
 
 // Bootstrap sessions are short-lived, single-use records. Plaintext bootstrap
@@ -375,7 +374,7 @@ model DeviceEvent {
   rssiDbm         Int?
   payload         Json?
 
-  device         Device                @relation(fields: [deviceId], references: [id], onDelete: Restrict)
+  device        Device               @relation(fields: [deviceId], references: [id], onDelete: Restrict)
   notifications DeviceNotification[]
 
   @@index([deviceId, occurredAt])
@@ -418,7 +417,7 @@ model StaffPushToken {
   createdAt  DateTime     @default(now())
   updatedAt  DateTime     @updatedAt
 
-  staff         Staff                 @relation(fields: [staffId], references: [id], onDelete: Restrict)
+  staff         Staff                @relation(fields: [staffId], references: [id], onDelete: Restrict)
   notifications DeviceNotification[]
 
   @@index([staffId, isActive])
@@ -430,18 +429,18 @@ model StaffPushToken {
 // ================================
 
 model DeviceNotification {
-  id             String             @id @default(cuid())
-  eventId        String
-  pushTokenId    String
-  status         NotificationStatus @default(PENDING)
-  attempts       Int                @default(0)
-  nextAttemptAt  DateTime           @default(now())
-  leaseUntil     DateTime?
-  fcmMessageId   String?            @db.VarChar(255)
-  lastError      String?            @db.VarChar(1000)
-  sentAt         DateTime?
-  createdAt      DateTime           @default(now())
-  updatedAt      DateTime           @updatedAt
+  id            String             @id @default(cuid())
+  eventId       String
+  pushTokenId   String
+  status        NotificationStatus @default(PENDING)
+  attempts      Int                @default(0)
+  nextAttemptAt DateTime           @default(now())
+  leaseUntil    DateTime?
+  fcmMessageId  String?            @db.VarChar(255)
+  lastError     String?            @db.VarChar(1000)
+  sentAt        DateTime?
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
 
   event     DeviceEvent    @relation(fields: [eventId], references: [id], onDelete: Restrict)
   pushToken StaffPushToken @relation(fields: [pushTokenId], references: [id], onDelete: Restrict)
@@ -455,13 +454,12 @@ model DeviceNotification {
 // Durable worker liveness and last-successful-processing signal. One row per
 // worker identity keeps health information available across process restarts.
 model NotificationWorkerHeartbeat {
-  id              String   @id @default(cuid())
-  workerId        String   @unique @db.VarChar(128)
+  id              String    @id @default(cuid())
+  workerId        String    @unique @db.VarChar(128)
   lastHeartbeatAt DateTime
   lastProcessedAt DateTime?
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
 
   @@index([lastHeartbeatAt])
 }
-

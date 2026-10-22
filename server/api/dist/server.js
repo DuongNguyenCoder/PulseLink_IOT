@@ -1,10 +1,14 @@
 import { env } from "./config/env.js";
+import { createRuntimeOptions } from "./config/runtime.js";
 import { buildApp } from "./app.js";
 import { getSafeErrorLogFields } from "./shared/logging.js";
 async function main() {
     let app;
+    let runtimeClose;
     try {
-        app = await buildApp();
+        const runtimeOptions = await createRuntimeOptions();
+        runtimeClose = runtimeOptions.close;
+        app = await buildApp(runtimeOptions);
         const shutdown = async (signal) => {
             app?.log.info({ signal }, "Shutting down PulseLink API");
             try {
@@ -28,6 +32,9 @@ async function main() {
         if (app) {
             app.log.error(getSafeErrorLogFields(error), "Failed to start PulseLink API");
             await app.close();
+        }
+        else {
+            await runtimeClose?.();
         }
         process.exitCode = 1;
     }

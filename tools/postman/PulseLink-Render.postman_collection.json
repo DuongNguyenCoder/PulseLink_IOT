@@ -1,0 +1,260 @@
+{
+  "info": {
+    "name": "PulseLink - Render HTTPS verification",
+    "description": "Smoke tests for API, notification worker, device event idempotency and validation. Secrets belong only in the local Postman environment.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [{ "key": "sample_event_id", "value": "" }],
+  "item": [
+    {
+      "name": "01 - Health",
+      "item": [
+        {
+          "name": "API - liveness",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{api_base_url}}/health/live"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('API is live', () => pm.response.to.have.status(200));",
+                  "pm.test('status is ok', () => pm.expect(pm.response.json().status).to.eql('ok')); "
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "API - readiness",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{api_base_url}}/health/ready"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('API database is ready', () => pm.response.to.have.status(200));",
+                  "pm.expect(pm.response.json().dependencies.database).to.eql('ok');"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Worker - liveness",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{worker_base_url}}/health/live"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Worker is live', () => pm.response.to.have.status(200));",
+                  "pm.expect(pm.response.json().service).to.eql('notification-worker');"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Worker - readiness",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{worker_base_url}}/health/ready"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Worker database is ready', () => pm.response.to.have.status(200));",
+                  "pm.expect(pm.response.json().status).to.eql('ready');"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "API - notification queue health",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{api_base_url}}/health/notifications"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Queue health is available', () => pm.response.to.have.status(200));",
+                  "pm.expect(pm.response.json()).to.have.property('workers');"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "02 - Device event",
+      "item": [
+        {
+          "name": "Device - accept event",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{device_token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"eventId\": \"{{$guid}}\",\n  \"type\": \"BUTTON_PRESSED\",\n  \"occurredAt\": \"{{event_occurred_at}}\",\n  \"firmwareVersion\": \"0.1.0-postman\",\n  \"rssiDbm\": -60,\n  \"payload\": { \"button\": \"main\", \"source\": \"postman\" }\n}"
+            },
+            "url": "{{api_base_url}}/v1/device-events"
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.environment.get('device_token')) throw new Error('Set device_token first');",
+                  "pm.environment.set('event_occurred_at', new Date().toISOString());"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Event accepted', () => pm.response.to.have.status(201));",
+                  "pm.expect(pm.response.json().data.status).to.eql('accepted');",
+                  "pm.environment.set('event_id', pm.response.json().data.eventId);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Device - retry same event",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{device_token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"eventId\": \"{{event_id}}\",\n  \"type\": \"BUTTON_PRESSED\",\n  \"occurredAt\": \"{{event_occurred_at}}\",\n  \"firmwareVersion\": \"0.1.0-postman\",\n  \"rssiDbm\": -60,\n  \"payload\": { \"button\": \"main\", \"source\": \"postman\" }\n}"
+            },
+            "url": "{{api_base_url}}/v1/device-events"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Equivalent retry is already accepted', () => pm.response.to.have.status(200));",
+                  "pm.expect(pm.response.json().data.status).to.eql('already_accepted');"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Device - conflicting retry",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{device_token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"eventId\": \"{{event_id}}\",\n  \"type\": \"BUTTON_PRESSED\",\n  \"occurredAt\": \"{{event_occurred_at}}\",\n  \"firmwareVersion\": \"0.1.0-postman\",\n  \"rssiDbm\": -60,\n  \"payload\": { \"button\": \"different\", \"source\": \"postman\" }\n}"
+            },
+            "url": "{{api_base_url}}/v1/device-events"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Conflicting retry is rejected', () => pm.response.to.have.status(409));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Device - missing credential",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"eventId\":\"{{$guid}}\",\"type\":\"BUTTON_PRESSED\",\"occurredAt\":\"{{$isoTimestamp}}\"}"
+            },
+            "url": "{{api_base_url}}/v1/device-events"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Missing credential is rejected', () => pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Device - invalid body",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{device_token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"type\": \"BUTTON_PRESSED\",\n  \"occurredAt\": \"not-a-date\",\n  \"unexpected\": true\n}"
+            },
+            "url": "{{api_base_url}}/v1/device-events"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Invalid body is rejected', () => pm.response.to.have.status(400));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

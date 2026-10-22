@@ -1,26 +1,38 @@
 import Fastify from "fastify";
 import { env } from "./config/env.js";
 import { healthRoutes } from "./modules/health/health.routes.js";
-import { authRoutes, type AuthRouteOptions } from "./modules/auth/auth.routes.js";
-import { storeRoutes, type StoreRouteOptions } from "./modules/stores/store.routes.js";
-import { installationRoutes, type InstallationRouteOptions } from "./modules/installations/installation.routes.js";
-import { provisioningRoutes, type ProvisioningRouteOptions } from "./modules/provisioning/provisioning.routes.js";
+import type { HealthRouteOptions } from "./modules/health/health.routes.js";
+import {
+  authRoutes,
+  type AuthRouteOptions,
+} from "./modules/auth/auth.routes.js";
+import {
+  storeRoutes,
+  type StoreRouteOptions,
+} from "./modules/stores/store.routes.js";
+import {
+  installationRoutes,
+  type InstallationRouteOptions,
+} from "./modules/installations/installation.routes.js";
+import {
+  provisioningRoutes,
+  type ProvisioningRouteOptions,
+} from "./modules/provisioning/provisioning.routes.js";
 import { deviceEventRoutes } from "./modules/device-events/device-event.routes.js";
 import { registerPrisma } from "./plugins/prisma.js";
 import { mapErrorToApiResponse } from "./shared/error-contract.js";
-import {
-  getSafeErrorLogFields,
-  REDACTED_LOG_PATHS,
-} from "./shared/logging.js";
+import { getSafeErrorLogFields, REDACTED_LOG_PATHS } from "./shared/logging.js";
 
 export interface BuildAppOptions {
-  auth?: AuthRouteOptions;
-  stores?: StoreRouteOptions;
-  installations?: InstallationRouteOptions;
-  provisioning?: ProvisioningRouteOptions;
+  health: HealthRouteOptions;
+  auth: AuthRouteOptions;
+  stores: StoreRouteOptions;
+  installations: InstallationRouteOptions;
+  provisioning: ProvisioningRouteOptions;
+  close?: () => Promise<void>;
 }
 
-export async function buildApp(options: BuildAppOptions = {}) {
+export async function buildApp(options: BuildAppOptions) {
   const app = Fastify({
     logger: {
       level: env.LOG_LEVEL,
@@ -44,10 +56,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
   });
 
   app.setErrorHandler((error: unknown, request, reply) => {
-    request.log.error(
-      getSafeErrorLogFields(error),
-      "Unhandled request error",
-    );
+    request.log.error(getSafeErrorLogFields(error), "Unhandled request error");
     const mapped = mapErrorToApiResponse(error, request.id);
     return reply.code(mapped.statusCode).send(mapped.response);
   });
@@ -58,20 +67,24 @@ export async function buildApp(options: BuildAppOptions = {}) {
     app.log.error(getSafeErrorLogFields(error), "Failed to initialize Prisma");
     throw error;
   }
-  await app.register(healthRoutes, { prefix: "/health" });
-  if (options.auth) {
-    await app.register(authRoutes, { ...options.auth, prefix: "/v1/auth" });
-  }
-  if (options.stores) {
-    await app.register(storeRoutes, { ...options.stores, prefix: "/v1/stores" });
-  }
-  if (options.installations) {
-    await app.register(installationRoutes, { ...options.installations, prefix: "/v1/installations" });
-  }
-  if (options.provisioning) {
-    await app.register(provisioningRoutes, { ...options.provisioning, prefix: "/v1" });
-  }
+  await app.register(healthRoutes, { ...options.health, prefix: "/health" });
+  await app.register(authRoutes, { ...options.auth, prefix: "/v1/auth" });
+  await app.register(storeRoutes, {
+    ...options.stores,
+    prefix: "/v1/stores",
+  });
+  await app.register(installationRoutes, {
+    ...options.installations,
+    prefix: "/v1/installations",
+  });
+  await app.register(provisioningRoutes, {
+    ...options.provisioning,
+    prefix: "/v1",
+  });
   await app.register(deviceEventRoutes, { prefix: "/v1" });
+  app.addHook("onClose", async () => {
+    await options.close?.();
+  });
 
   return app;
 }

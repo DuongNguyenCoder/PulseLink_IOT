@@ -9,23 +9,21 @@ export class RefreshSessionError extends Error {
         this.name = 'RefreshSessionError';
     }
 }
-export async function createSession(database, input, now = new Date()) {
+export async function createSessionInTransaction(transaction, input, now = new Date()) {
     const refreshToken = generateRefreshToken();
     const idleExpiresAt = new Date(now.getTime() + SESSION_IDLE_TTL_MS);
     const absoluteExpiresAt = new Date(now.getTime() + SESSION_ABSOLUTE_TTL_MS);
-    await database.$transaction(async (transaction) => {
-        await transaction.session.create({
-            data: {
-                id: input.sessionId,
-                accountId: input.accountId,
-                appInstallationId: input.appInstallationId,
-                refreshTokenHash: refreshToken.verifier,
-                tokenFamilyId: generateTokenFamilyId(),
-                generation: 0,
-                idleExpiresAt,
-                absoluteExpiresAt,
-            },
-        });
+    await transaction.session.create({
+        data: {
+            id: input.sessionId,
+            accountId: input.accountId,
+            appInstallationId: input.appInstallationId,
+            refreshTokenHash: refreshToken.verifier,
+            tokenFamilyId: generateTokenFamilyId(),
+            generation: 0,
+            idleExpiresAt,
+            absoluteExpiresAt,
+        },
     });
     return {
         sessionId: input.sessionId,
@@ -33,6 +31,9 @@ export async function createSession(database, input, now = new Date()) {
         idleExpiresAt,
         absoluteExpiresAt,
     };
+}
+export async function createSession(database, input, now = new Date()) {
+    return database.$transaction((transaction) => createSessionInTransaction(transaction, input, now));
 }
 export async function rotateRefreshSession(database, refreshToken, replacementSessionId, now = new Date(), requestId) {
     const outcome = await database.$transaction(async (transaction) => {

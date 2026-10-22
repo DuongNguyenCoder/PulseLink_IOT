@@ -46,4 +46,24 @@ describe("health routes", () => {
       dependencies: { database: "ok" },
     });
   });
+
+  it("protects notification diagnostics when a token is configured", async () => {
+    const app = Fastify({ logger: false });
+    apps.push(app);
+    await app.register(healthRoutes, {
+      prefix: "/health",
+      diagnosticsToken: "a".repeat(32),
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/health/notifications",
+    });
+
+    expect(response.statusCode).toBe(401);
+    expect(response.json()).toMatchObject({
+      status: "error",
+      error: "Unauthorized",
+    });
+  });
 });

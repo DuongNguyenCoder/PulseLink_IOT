@@ -7,6 +7,10 @@
     "build": "npm run db:generate && tsc",
     "start": "node dist/server.js",
     "worker": "tsx src/worker.ts",
+    "test-device:create": "tsx scripts/create-test-device.ts",
+    "test-recipient:prepare": "tsx scripts/prepare-test-recipient.ts",
+    "test-push-token:register": "tsx scripts/register-test-push-token.ts",
+    "production:recipient:prepare": "tsx scripts/prepare-production-fcm-recipient.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:unit": "vitest run",
@@ -21,11 +25,14 @@
   "dependencies": {
     "@prisma/adapter-pg": "^7.10.0",
     "@prisma/client": "^7.10.0",
+    "@types/nodemailer": "^8.0.2",
     "dotenv": "^18.0.7",
     "fastify": "^5.12.5",
     "firebase-admin": "^14.5.0",
     "jose": "^6.2.12",
+    "nodemailer": "^10.1.7",
     "pg": "^8.23.1",
+    "redis": "^6.3.0",
     "zod": "^4.6.5"
   },
   "devDependencies": {

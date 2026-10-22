@@ -1,15 +1,15 @@
 import Fastify from "fastify";
 import { env } from "./config/env.js";
 import { healthRoutes } from "./modules/health/health.routes.js";
-import { authRoutes } from "./modules/auth/auth.routes.js";
-import { storeRoutes } from "./modules/stores/store.routes.js";
-import { installationRoutes } from "./modules/installations/installation.routes.js";
-import { provisioningRoutes } from "./modules/provisioning/provisioning.routes.js";
+import { authRoutes, } from "./modules/auth/auth.routes.js";
+import { storeRoutes, } from "./modules/stores/store.routes.js";
+import { installationRoutes, } from "./modules/installations/installation.routes.js";
+import { provisioningRoutes, } from "./modules/provisioning/provisioning.routes.js";
 import { deviceEventRoutes } from "./modules/device-events/device-event.routes.js";
 import { registerPrisma } from "./plugins/prisma.js";
 import { mapErrorToApiResponse } from "./shared/error-contract.js";
-import { getSafeErrorLogFields, REDACTED_LOG_PATHS, } from "./shared/logging.js";
-export async function buildApp(options = {}) {
+import { getSafeErrorLogFields, REDACTED_LOG_PATHS } from "./shared/logging.js";
+export async function buildApp(options) {
     const app = Fastify({
         logger: {
             level: env.LOG_LEVEL,
@@ -42,19 +42,23 @@ export async function buildApp(options = {}) {
         app.log.error(getSafeErrorLogFields(error), "Failed to initialize Prisma");
         throw error;
     }
-    await app.register(healthRoutes, { prefix: "/health" });
-    if (options.auth) {
-        await app.register(authRoutes, { ...options.auth, prefix: "/v1/auth" });
-    }
-    if (options.stores) {
-        await app.register(storeRoutes, { ...options.stores, prefix: "/v1/stores" });
-    }
-    if (options.installations) {
-        await app.register(installationRoutes, { ...options.installations, prefix: "/v1/installations" });
-    }
-    if (options.provisioning) {
-        await app.register(provisioningRoutes, { ...options.provisioning, prefix: "/v1" });
-    }
+    await app.register(healthRoutes, { ...options.health, prefix: "/health" });
+    await app.register(authRoutes, { ...options.auth, prefix: "/v1/auth" });
+    await app.register(storeRoutes, {
+        ...options.stores,
+        prefix: "/v1/stores",
+    });
+    await app.register(installationRoutes, {
+        ...options.installations,
+        prefix: "/v1/installations",
+    });
+    await app.register(provisioningRoutes, {
+        ...options.provisioning,
+        prefix: "/v1",
+    });
     await app.register(deviceEventRoutes, { prefix: "/v1" });
+    app.addHook("onClose", async () => {
+        await options.close?.();
+    });
     return app;
 }

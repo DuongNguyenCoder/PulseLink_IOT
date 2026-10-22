@@ -1,8 +1,31 @@
 import type { FastifyPluginAsync } from "fastify";
+import { timingSafeEqual } from "node:crypto";
 import { getSafeErrorLogFields } from "../../shared/logging.js";
 import { PrismaNotificationJobRepository } from "../notifications/notification-repository.js";
 
-export const healthRoutes: FastifyPluginAsync = async (app) => {
+export interface HealthRouteOptions {
+  diagnosticsToken?: string;
+}
+
+function hasDiagnosticsAccess(
+  request: { headers: Record<string, string | string[] | undefined> },
+  expected: string | undefined,
+): boolean {
+  if (expected === undefined) return true;
+  const provided = request.headers["x-health-diagnostics-token"];
+  if (typeof provided !== "string") return false;
+  const actualBuffer = Buffer.from(provided);
+  const expectedBuffer = Buffer.from(expected);
+  return (
+    actualBuffer.length === expectedBuffer.length &&
+    timingSafeEqual(actualBuffer, expectedBuffer)
+  );
+}
+
+export const healthRoutes: FastifyPluginAsync<HealthRouteOptions> = async (
+  app,
+  options,
+) => {
   // Liveness: process is running. This endpoint intentionally does not query the database.
   app.get("/live", async () => ({
     status: "ok",
@@ -22,22 +45,6 @@ export const healthRoutes: FastifyPluginAsync = async (app) => {
       };
     } catch (error: unknown) {
       request.log.error(getSafeErrorLogFields(error), "Readiness check failed");
-      request.log.error(
-        {
-          errorType:
-            error instanceof Error ? error.constructor.name : typeof error,
-          errorCode:
-            typeof error === "object" && error !== null && "code" in error
-              ? error.code
-              : undefined,
-          message: error instanceof Error ? error.message : String(error),
-          meta:
-            typeof error === "object" && error !== null && "meta" in error
-              ? error.meta
-              : undefined,
-        },
-        "Readiness check failed",
-      );
       return reply.code(503).send({
         status: "error",
         service: "pulselink-api",
@@ -48,6 +55,13 @@ export const healthRoutes: FastifyPluginAsync = async (app) => {
   });
 
   app.get("/notifications", async (request, reply) => {
+    if (!hasDiagnosticsAccess(request, options.diagnosticsToken)) {
+      return reply.code(401).send({
+        status: "error",
+        service: "pulselink-api",
+        error: "Unauthorized",
+      });
+    }
     try {
       const now = new Date();
       const snapshot = await new PrismaNotificationJobRepository(

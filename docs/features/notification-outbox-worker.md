@@ -41,7 +41,8 @@ Migration `20261016100000_notification_outbox_worker` adds `PROCESSING`, `nextAt
 Migration `20261016110000_notification_observability` adds the durable
 `NotificationWorkerHeartbeat` table. Each worker upserts its heartbeat and
 last processed timestamp; the API exposes queue diagnostics at
-`GET /health/notifications`. The response contains status counts, retry-ready
+`GET /health/notifications` (with the configured
+`X-Health-Diagnostics-Token` header in production). The response contains status counts, retry-ready
 jobs, expired leases, oldest pending age, and worker heartbeat ages. It never
 contains FCM tokens, payloads, or credentials.
 
