@@ -91,8 +91,8 @@ async function createLoginRateLimiter() {
     }
     const redisUrl = required("REDIS_URL", env.REDIS_URL);
     const keySecret = required("LOGIN_RATE_LIMIT_KEY_SECRET", env.LOGIN_RATE_LIMIT_KEY_SECRET);
-    if (env.NODE_ENV === "production" && !redisUrl.startsWith("rediss://")) {
-        throw new Error("Production Redis rate limiting requires a rediss:// URL");
+    if (env.NODE_ENV === "production" && !redisUrl.startsWith("redis://")) {
+        throw new Error("Production Redis rate limiting requires a redis:// URL");
     }
     writeStartupLog("redis.connect.start", {
         endpoint: describeRedisEndpoint(redisUrl),
@@ -136,8 +136,8 @@ function validateProductionRateLimiterConfiguration() {
     }
     const redisUrl = required("REDIS_URL", env.REDIS_URL);
     required("LOGIN_RATE_LIMIT_KEY_SECRET", env.LOGIN_RATE_LIMIT_KEY_SECRET);
-    if (!redisUrl.startsWith("rediss://")) {
-        throw new Error("Production Redis rate limiting requires a rediss:// URL");
+    if (!redisUrl.startsWith("redis://")) {
+        throw new Error("Production Redis rate limiting requires a redis:// URL");
     }
 }
 function createEmailSender() {
