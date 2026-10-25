@@ -70,6 +70,22 @@ or replaced by production in-memory state. Protected routes use the reusable
 database-authoritative authentication hook and must re-check Account status
 and `authVersion`.
 
+### Email verification link contract
+
+The email verification link is an HTTPS landing flow at
+`GET /verify-email?token={token}`. Opening the link validates only the token
+shape, places the one-time token in a short-lived `Secure`, `HttpOnly`,
+`SameSite=Strict` cookie and renders a confirmation page. It does not consume
+the token on `GET`, protecting against link previews and security scanners.
+
+The confirmation form submits `POST /verify-email/complete`; only that request
+calls the existing token-consumption service. The existing API contract
+`POST /v1/auth/verify-email` with `{ token }` remains available for mobile or
+manual clients. Neither route returns the token or account details. Invalid,
+expired and already-consumed tokens are rendered as a generic verification
+failure by the landing flow and mapped through the existing API error contract
+by the API route.
+
 ### First-installation login bootstrap
 
 `POST /v1/auth/login` remains the authentication endpoint. For an existing

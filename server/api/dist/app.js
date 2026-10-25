@@ -6,6 +6,7 @@ import { storeRoutes, } from "./modules/stores/store.routes.js";
 import { installationRoutes, } from "./modules/installations/installation.routes.js";
 import { provisioningRoutes, } from "./modules/provisioning/provisioning.routes.js";
 import { deviceEventRoutes } from "./modules/device-events/device-event.routes.js";
+import { emailVerificationRoutes } from "./modules/auth/email-verification.routes.js";
 import { registerPrisma } from "./plugins/prisma.js";
 import { mapErrorToApiResponse } from "./shared/error-contract.js";
 import { getSafeErrorLogFields, REDACTED_LOG_PATHS } from "./shared/logging.js";
@@ -44,6 +45,7 @@ export async function buildApp(options) {
     }
     await app.register(healthRoutes, { ...options.health, prefix: "/health" });
     await app.register(authRoutes, { ...options.auth, prefix: "/v1/auth" });
+    await app.register(emailVerificationRoutes);
     await app.register(storeRoutes, {
         ...options.stores,
         prefix: "/v1/stores",
