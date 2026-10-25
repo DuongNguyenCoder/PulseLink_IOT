@@ -1,6 +1,9 @@
 import Fastify from "fastify";
 import { describe, expect, it } from "vitest";
-import { emailVerificationRoutes } from "./email-verification.routes.js";
+import {
+  emailVerificationRoutes,
+  registerVerificationFormParser,
+} from "./email-verification.routes.js";
 
 const token = "verification-token-012345678901234567890123456789";
 
@@ -46,6 +49,7 @@ function createApp(options: { tokenFound: boolean } = { tokenFound: true }) {
 describe("email verification web flow", () => {
   it("registers GET /verify-email and does not consume on link open", async () => {
     const { app } = createApp();
+    registerVerificationFormParser(app);
     await app.register(emailVerificationRoutes);
 
     const response = await app.inject({
@@ -62,6 +66,7 @@ describe("email verification web flow", () => {
 
   it("consumes only after the confirmation POST", async () => {
     const { app, accountUpdated } = createApp();
+    registerVerificationFormParser(app);
     await app.register(emailVerificationRoutes);
 
     const link = await app.inject({
@@ -72,7 +77,11 @@ describe("email verification web flow", () => {
     const response = await app.inject({
       method: "POST",
       url: "/verify-email/complete",
-      headers: { cookie },
+      headers: {
+        cookie: cookie ?? "",
+        "content-type": "application/x-www-form-urlencoded",
+      },
+      payload: "",
     });
 
     expect(response.statusCode).toBe(200);
@@ -84,11 +93,14 @@ describe("email verification web flow", () => {
 
   it("does not consume a missing or invalid cookie", async () => {
     const { app, accountUpdated } = createApp({ tokenFound: false });
+    registerVerificationFormParser(app);
     await app.register(emailVerificationRoutes);
 
     const response = await app.inject({
       method: "POST",
       url: "/verify-email/complete",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      payload: "",
     });
 
     expect(response.statusCode).toBe(400);

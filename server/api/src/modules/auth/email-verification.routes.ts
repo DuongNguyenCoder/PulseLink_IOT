@@ -1,4 +1,5 @@
 import { performance } from "node:perf_hooks";
+import type { FastifyInstance } from "fastify";
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import {
@@ -10,6 +11,14 @@ import { getSafeErrorLogFields } from "../../shared/logging.js";
 const tokenSchema = z.string().min(32).max(512);
 const verificationCookie = "__Host-pulselink-email-verification";
 const cookieMaxAgeSeconds = 15 * 60;
+
+export function registerVerificationFormParser(app: FastifyInstance): void {
+  app.addContentTypeParser(
+    "application/x-www-form-urlencoded",
+    { parseAs: "string", bodyLimit: 4096 },
+    (_request, body, done) => done(null, body),
+  );
+}
 
 function page(title: string, message: string, action?: string): string {
   const button =

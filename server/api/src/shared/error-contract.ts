@@ -1,14 +1,15 @@
 export type ApiErrorCode =
-  | 'VALIDATION_ERROR'
-  | 'UNAUTHENTICATED'
-  | 'FORBIDDEN'
-  | 'NOT_FOUND'
-  | 'CONFLICT'
-  | 'RATE_LIMITED'
-  | 'PAYLOAD_TOO_LARGE'
-  | 'DEPENDENCY_UNAVAILABLE'
-  | 'INTERNAL_SERVER_ERROR'
-  | 'BAD_REQUEST';
+  | "VALIDATION_ERROR"
+  | "UNAUTHENTICATED"
+  | "FORBIDDEN"
+  | "NOT_FOUND"
+  | "CONFLICT"
+  | "RATE_LIMITED"
+  | "PAYLOAD_TOO_LARGE"
+  | "UNSUPPORTED_MEDIA_TYPE"
+  | "DEPENDENCY_UNAVAILABLE"
+  | "INTERNAL_SERVER_ERROR"
+  | "BAD_REQUEST";
 
 export interface ApiErrorResponse {
   error: {
@@ -25,13 +26,13 @@ interface ErrorLike {
 }
 
 function asErrorLike(error: unknown): ErrorLike {
-  return typeof error === 'object' && error !== null
+  return typeof error === "object" && error !== null
     ? (error as ErrorLike)
     : {};
 }
 
 function getStatusCode(error: ErrorLike): number {
-  return typeof error.statusCode === 'number' ? error.statusCode : 500;
+  return typeof error.statusCode === "number" ? error.statusCode : 500;
 }
 
 export function mapErrorToApiResponse(
@@ -41,15 +42,29 @@ export function mapErrorToApiResponse(
   const errorLike = asErrorLike(error);
   const statusCode = getStatusCode(errorLike);
   const isValidation =
-    errorLike.code === 'FST_ERR_VALIDATION' || errorLike.validation !== undefined;
+    errorLike.code === "FST_ERR_VALIDATION" ||
+    errorLike.validation !== undefined;
 
   if (isValidation) {
     return {
       statusCode: 400,
       response: {
         error: {
-          code: 'VALIDATION_ERROR',
-          message: 'Request validation failed',
+          code: "VALIDATION_ERROR",
+          message: "Request validation failed",
+          requestId,
+        },
+      },
+    };
+  }
+
+  if (errorLike.code === "FST_ERR_CTP_INVALID_MEDIA_TYPE") {
+    return {
+      statusCode: 415,
+      response: {
+        error: {
+          code: "UNSUPPORTED_MEDIA_TYPE",
+          message: "Unsupported request media type",
           requestId,
         },
       },
@@ -59,23 +74,43 @@ export function mapErrorToApiResponse(
   const mapped = (() => {
     switch (statusCode) {
       case 400:
-        return { code: 'BAD_REQUEST', message: 'Bad request' } as const;
+        return { code: "BAD_REQUEST", message: "Bad request" } as const;
       case 401:
-        return { code: 'UNAUTHENTICATED', message: 'Authentication required' } as const;
+        return {
+          code: "UNAUTHENTICATED",
+          message: "Authentication required",
+        } as const;
       case 403:
-        return { code: 'FORBIDDEN', message: 'Access denied' } as const;
+        return { code: "FORBIDDEN", message: "Access denied" } as const;
       case 404:
-        return { code: 'NOT_FOUND', message: 'Resource not found' } as const;
+        return { code: "NOT_FOUND", message: "Resource not found" } as const;
       case 409:
-        return { code: 'CONFLICT', message: 'Request conflicts with current state' } as const;
+        return {
+          code: "CONFLICT",
+          message: "Request conflicts with current state",
+        } as const;
       case 413:
-        return { code: 'PAYLOAD_TOO_LARGE', message: 'Request payload is too large' } as const;
+        return {
+          code: "PAYLOAD_TOO_LARGE",
+          message: "Request payload is too large",
+        } as const;
+      case 415:
+        return {
+          code: "UNSUPPORTED_MEDIA_TYPE",
+          message: "Unsupported request media type",
+        } as const;
       case 429:
-        return { code: 'RATE_LIMITED', message: 'Too many requests' } as const;
+        return { code: "RATE_LIMITED", message: "Too many requests" } as const;
       case 503:
-        return { code: 'DEPENDENCY_UNAVAILABLE', message: 'A required dependency is unavailable' } as const;
+        return {
+          code: "DEPENDENCY_UNAVAILABLE",
+          message: "A required dependency is unavailable",
+        } as const;
       default:
-        return { code: 'INTERNAL_SERVER_ERROR', message: 'An unexpected error occurred' } as const;
+        return {
+          code: "INTERNAL_SERVER_ERROR",
+          message: "An unexpected error occurred",
+        } as const;
     }
   })();
 

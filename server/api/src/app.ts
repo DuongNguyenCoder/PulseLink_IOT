@@ -19,7 +19,10 @@ import {
   type ProvisioningRouteOptions,
 } from "./modules/provisioning/provisioning.routes.js";
 import { deviceEventRoutes } from "./modules/device-events/device-event.routes.js";
-import { emailVerificationRoutes } from "./modules/auth/email-verification.routes.js";
+import {
+  emailVerificationRoutes,
+  registerVerificationFormParser,
+} from "./modules/auth/email-verification.routes.js";
 import { registerPrisma } from "./plugins/prisma.js";
 import { mapErrorToApiResponse } from "./shared/error-contract.js";
 import { getSafeErrorLogFields, REDACTED_LOG_PATHS } from "./shared/logging.js";
@@ -68,6 +71,7 @@ export async function buildApp(options: BuildAppOptions) {
     app.log.error(getSafeErrorLogFields(error), "Failed to initialize Prisma");
     throw error;
   }
+  registerVerificationFormParser(app);
   await app.register(healthRoutes, { ...options.health, prefix: "/health" });
   await app.register(authRoutes, { ...options.auth, prefix: "/v1/auth" });
   await app.register(emailVerificationRoutes);

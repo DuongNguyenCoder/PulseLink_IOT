@@ -78,8 +78,11 @@ shape, places the one-time token in a short-lived `Secure`, `HttpOnly`,
 `SameSite=Strict` cookie and renders a confirmation page. It does not consume
 the token on `GET`, protecting against link previews and security scanners.
 
-The confirmation form submits `POST /verify-email/complete`; only that request
-calls the existing token-consumption service. The existing API contract
+The confirmation form submits `POST /verify-email/complete` with the browser's
+`application/x-www-form-urlencoded` form media type and no token body; the
+server accepts this bounded, ignored form body and reads the token only from
+the protected cookie. Only that request calls the existing token-consumption
+service. The existing API contract
 `POST /v1/auth/verify-email` with `{ token }` remains available for mobile or
 manual clients. Neither route returns the token or account details. Invalid,
 expired and already-consumed tokens are rendered as a generic verification
