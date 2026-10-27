@@ -14,7 +14,9 @@ const job: ClaimedNotificationJob = {
   id: "notification-1",
   eventId: "event-1",
   pushTokenId: "token-1",
+  appInstallationId: null,
   token: "opaque-test-token",
+  tokenFingerprint: null,
   eventType: "BUTTON_PRESSED",
   attempts: 1,
 };
@@ -25,6 +27,9 @@ class FakeRepository implements NotificationJobRepository {
   retries: Array<{ id: string; nextAttemptAt: Date; reason: string }> = [];
   failed: Array<{ id: string; reason: string }> = [];
   deactivated: string[] = [];
+  revalidate?: NotificationJobRepository["revalidate"];
+  cancel?: NotificationJobRepository["cancel"];
+  invalidateInstallationToken?: NotificationJobRepository["invalidateInstallationToken"];
 
   async claim(): Promise<ClaimedNotificationJob[]> {
     const result = this.claimed;
@@ -187,5 +192,63 @@ describe("notification worker", () => {
 
     await worker.run();
     expect(sleeps).toBe(1);
+  });
+
+  it("cancels an Account installation job when eligibility is revoked", async () => {
+    const repository = new FakeRepository();
+    repository.claimed = [
+      {
+        ...job,
+        pushTokenId: null,
+        appInstallationId: "installation-1",
+      },
+    ];
+    let cancelled: Array<{ id: string; reason: string }> = [];
+    repository.revalidate = async () => ({
+      eligible: false,
+      reason: "recipient_no_longer_eligible",
+    });
+    repository.cancel = async (id, reason) => {
+      cancelled.push({ id, reason });
+    };
+    const worker = new NotificationWorker(repository, new FakeSender());
+
+    await worker.processOnce();
+    expect(cancelled).toEqual([
+      { id: "notification-1", reason: "recipient_no_longer_eligible" },
+    ]);
+    expect(worker.getMetrics()).toMatchObject({ cancelled: 1, sent: 0 });
+  });
+
+  it("invalidates only the current Account installation token", async () => {
+    const repository = new FakeRepository();
+    repository.claimed = [
+      {
+        ...job,
+        pushTokenId: null,
+        appInstallationId: "installation-1",
+      },
+    ];
+    repository.revalidate = async () => ({
+      eligible: true,
+      token: "installation-token",
+      tokenFingerprint: "fingerprint-1",
+    });
+    let invalidated: unknown;
+    repository.invalidateInstallationToken = async (...args) => {
+      invalidated = args;
+    };
+    const worker = new NotificationWorker(
+      repository,
+      new FakeSender(new InvalidFcmTokenError()),
+    );
+
+    await worker.processOnce();
+    expect(invalidated).toEqual([
+      "installation-1",
+      "fingerprint-1",
+      expect.any(Date),
+    ]);
+    expect(repository.deactivated).toHaveLength(0);
   });
 });

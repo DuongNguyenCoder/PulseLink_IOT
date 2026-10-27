@@ -29,6 +29,7 @@ export class NotificationWorker {
         retried: 0,
         failed: 0,
         invalidTokens: 0,
+        cancelled: 0,
         leaseRecoveries: 0,
         lastProcessedAt: null,
     };
@@ -59,6 +60,7 @@ export class NotificationWorker {
     async processOnce() {
         const now = this.options.now();
         await this.repository.recordHeartbeat?.(this.options.workerId, now, this.lastProcessedAt);
+        await this.repository.cancelIneligibleJobs?.(now);
         const jobs = await this.repository.claim(this.options.concurrency, now, new Date(now.getTime() + this.options.leaseMs));
         this.metrics.processed += jobs.length;
         this.metrics.leaseRecoveries += jobs.filter((job) => job.leaseRecovered === true).length;
@@ -77,9 +79,19 @@ export class NotificationWorker {
         }
     }
     async processJob(job) {
+        let tokenFingerprint = job.tokenFingerprint;
         try {
+            const eligibility = await this.repository.revalidate?.(job);
+            if (eligibility !== undefined && !eligibility.eligible) {
+                await this.repository.cancel?.(job.id, eligibility.reason ?? "recipient_no_longer_eligible");
+                this.metrics.cancelled += 1;
+                this.options.logger.info({ notificationId: job.id, outcome: "cancelled" }, "Notification recipient is no longer eligible");
+                return;
+            }
+            const token = eligibility?.token ?? job.token;
+            tokenFingerprint = eligibility?.tokenFingerprint ?? job.tokenFingerprint;
             const messageId = await this.sender.send({
-                token: job.token,
+                token,
                 data: {
                     eventId: job.eventId,
                     eventType: job.eventType,
@@ -101,7 +113,13 @@ export class NotificationWorker {
         catch (error) {
             const reason = boundedReason(error);
             if (error instanceof InvalidFcmTokenError) {
-                await this.repository.deactivateToken(job.pushTokenId, this.options.now());
+                if (job.appInstallationId !== null &&
+                    this.repository.invalidateInstallationToken !== undefined) {
+                    await this.repository.invalidateInstallationToken(job.appInstallationId, tokenFingerprint, this.options.now());
+                }
+                else if (job.pushTokenId !== null) {
+                    await this.repository.deactivateToken(job.pushTokenId, this.options.now());
+                }
                 await this.repository.markFailed(job.id, reason);
                 this.metrics.failed += 1;
                 this.metrics.invalidTokens += 1;

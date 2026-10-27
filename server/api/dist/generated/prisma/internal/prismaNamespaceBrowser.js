@@ -220,6 +220,7 @@ export const DeviceNotificationScalarFieldEnum = {
     id: 'id',
     eventId: 'eventId',
     pushTokenId: 'pushTokenId',
+    appInstallationId: 'appInstallationId',
     status: 'status',
     attempts: 'attempts',
     nextAttemptAt: 'nextAttemptAt',

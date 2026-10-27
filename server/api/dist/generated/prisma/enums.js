@@ -52,7 +52,8 @@ export const NotificationStatus = {
     PENDING: 'PENDING',
     PROCESSING: 'PROCESSING',
     SENT: 'SENT',
-    FAILED: 'FAILED'
+    FAILED: 'FAILED',
+    CANCELLED: 'CANCELLED'
 };
 export const AccountStatus = {
     PENDING: 'PENDING',

@@ -33,6 +33,7 @@ export interface BuildAppOptions {
   stores: StoreRouteOptions;
   installations: InstallationRouteOptions;
   provisioning: ProvisioningRouteOptions;
+  notificationRecipientMode?: "legacy" | "account";
   close?: () => Promise<void>;
 }
 
@@ -87,7 +88,11 @@ export async function buildApp(options: BuildAppOptions) {
     ...options.provisioning,
     prefix: "/v1",
   });
-  await app.register(deviceEventRoutes, { prefix: "/v1" });
+  await app.register(deviceEventRoutes, {
+    prefix: "/v1",
+    recipientMode:
+      options.notificationRecipientMode ?? env.NOTIFICATION_RECIPIENT_MODE,
+  });
   app.addHook("onClose", async () => {
     await options.close?.();
   });

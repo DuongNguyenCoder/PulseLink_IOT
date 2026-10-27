@@ -4,6 +4,7 @@ import { PrismaNotificationJobRepository } from "./modules/notifications/notific
 import { NotificationWorker } from "./modules/notifications/notification-worker.js";
 import { createPrismaClient } from "./plugins/prisma.js";
 import { getSafeErrorLogFields } from "./shared/logging.js";
+import { loadFcmKeys } from "./config/runtime.js";
 
 async function main(): Promise<void> {
   const prisma = createPrismaClient();
@@ -106,7 +107,7 @@ async function main(): Promise<void> {
     const sender = createFirebaseSender();
 
     worker = new NotificationWorker(
-      new PrismaNotificationJobRepository(prisma),
+      new PrismaNotificationJobRepository(prisma, loadFcmKeys()),
       sender,
       { logger: loggerHost.log },
     );

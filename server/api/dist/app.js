@@ -59,7 +59,10 @@ export async function buildApp(options) {
         ...options.provisioning,
         prefix: "/v1",
     });
-    await app.register(deviceEventRoutes, { prefix: "/v1" });
+    await app.register(deviceEventRoutes, {
+        prefix: "/v1",
+        recipientMode: options.notificationRecipientMode ?? env.NOTIFICATION_RECIPIENT_MODE,
+    });
     app.addHook("onClose", async () => {
         await options.close?.();
     });

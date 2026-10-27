@@ -58,6 +58,7 @@ const envSchema = z.object({
         .includes("{token}")
         .optional(),
     PASSWORD_RESET_URL_TEMPLATE: z.string().url().includes("{token}").optional(),
+    NOTIFICATION_RECIPIENT_MODE: z.enum(["legacy", "account"]).default("legacy"),
 });
 const parsed = envSchema.safeParse(process.env);
 if (!parsed.success) {

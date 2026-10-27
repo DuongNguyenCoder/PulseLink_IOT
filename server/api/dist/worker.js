@@ -4,6 +4,7 @@ import { PrismaNotificationJobRepository } from "./modules/notifications/notific
 import { NotificationWorker } from "./modules/notifications/notification-worker.js";
 import { createPrismaClient } from "./plugins/prisma.js";
 import { getSafeErrorLogFields } from "./shared/logging.js";
+import { loadFcmKeys } from "./config/runtime.js";
 async function main() {
     const prisma = createPrismaClient();
     const loggerHost = Fastify({
@@ -84,7 +85,7 @@ async function main() {
             port: Number(process.env.PORT ?? 3000),
         });
         const sender = createFirebaseSender();
-        worker = new NotificationWorker(new PrismaNotificationJobRepository(prisma), sender, { logger: loggerHost.log });
+        worker = new NotificationWorker(new PrismaNotificationJobRepository(prisma, loadFcmKeys()), sender, { logger: loggerHost.log });
         // Start the worker loop independently of the HTTP server.
         workerRunPromise = worker.run();
         ready = true;

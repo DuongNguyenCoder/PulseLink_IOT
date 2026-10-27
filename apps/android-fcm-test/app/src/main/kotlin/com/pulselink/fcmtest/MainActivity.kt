@@ -49,12 +49,14 @@ class MainActivity : Activity() {
         initializeFirebase()
         requestNotificationPermissionIfNeeded()
         handleDeepLink(intent)
+        handleNotificationIntent(intent)
     }
 
     override fun onNewIntent(intent: Intent?) {
         super.onNewIntent(intent)
         setIntent(intent)
         handleDeepLink(intent)
+        handleNotificationIntent(intent)
     }
 
     override fun onResume() {
@@ -145,7 +147,10 @@ class MainActivity : Activity() {
         FirebaseMessaging.getInstance().token.addOnCompleteListener { task ->
             if (task.isSuccessful) {
                 credentials.saveFcmToken(task.result)
-                refreshState()
+                executor.execute {
+                    syncInstallationTokenWithRetry()
+                    runOnUiThread { refreshState() }
+                }
             } else tokenView.text = "Token unavailable; check Firebase configuration"
         }
     }
@@ -174,17 +179,20 @@ class MainActivity : Activity() {
                 installationIdInput.text.toString().trim(),
                 credentials.getFcmToken(),
             )
+            credentials.saveApiBase(apiBase())
+            credentials.saveInstallationId(installationIdInput.text.toString().trim())
             credentials.save(tokens)
+            syncInstallationTokenWithRetry()
             "Signed in. Session stored securely on this device."
         }
     }
 
     private fun signout() {
         val refreshToken = credentials.getRefreshToken()
+        credentials.clear()
         if (refreshToken != null && apiBaseInput.text.toString().isNotBlank()) {
             executor.execute { runCatching { ApiClient(apiBase()).logout(refreshToken) } }
         }
-        credentials.clear()
         authStatus.text = "Signed out on this device"
     }
 
@@ -230,25 +238,27 @@ class MainActivity : Activity() {
     }
 
     private fun registerInstallation() {
-        val token = credentials.getFcmToken()
-        val accessToken = credentials.getAccessToken()
-        if (accessToken.isNullOrBlank() || token.isNullOrBlank()) {
-            backendStatus.text = "Sign in and obtain an FCM token first"
-            return
-        }
+        credentials.saveApiBase(apiBase())
+        credentials.saveInstallationId(installationIdInput.text.toString().trim())
         runApi("Registering FCM token…", backendStatus) {
-            val client = ApiClient(apiBase())
-            try {
-                client.registerInstallation(accessToken, installationIdInput.text.toString().trim(), token)
-            } catch (error: ApiException) {
-                if (error.statusCode != 401) throw error
-                val refreshToken = credentials.getRefreshToken() ?: throw error
-                val refreshed = client.refresh(refreshToken)
-                credentials.save(refreshed)
-                client.registerInstallation(refreshed.accessToken, installationIdInput.text.toString().trim(), token)
+            when (syncInstallationTokenWithRetry()) {
+                InstallationSyncOutcome.SYNCED -> "FCM token registered for this installation"
+                InstallationSyncOutcome.SKIPPED_NOT_AUTHENTICATED -> "Sign in and obtain an FCM token first"
+                InstallationSyncOutcome.SKIPPED_SESSION_CHANGED -> "Session changed; sign in again"
+                InstallationSyncOutcome.FAILED_RETRYABLE -> "Token registration could not reach the backend"
+                InstallationSyncOutcome.FAILED -> "FCM token registration failed"
             }
-            "FCM token registered for this installation"
         }
+    }
+
+    private fun syncInstallationTokenWithRetry(): InstallationSyncOutcome {
+        val sync = InstallationTokenSync(credentials)
+        var outcome = sync.sync()
+        if (outcome == InstallationSyncOutcome.FAILED_RETRYABLE) {
+            Thread.sleep(1_000)
+            outcome = sync.sync()
+        }
+        return outcome
     }
 
     private fun handleDeepLink(intent: Intent?) {
@@ -276,6 +286,16 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun handleNotificationIntent(intent: Intent?) {
+        val eventId = intent?.getStringExtra(PulseLinkState.EVENT_ID_EXTRA) ?: return
+        val eventType = intent.getStringExtra(PulseLinkState.EVENT_TYPE_EXTRA)
+        val payload = NotificationPayload.fromData(
+            mapOf("eventId" to eventId, "eventType" to (eventType ?: "")),
+        ) ?: return
+        if (payload.eventId != eventId) return
+        authStatus.text = "Service event received. Sign in to view authorized details."
+    }
+
     private fun runApi(working: String, target: TextView, action: () -> String) {
         if (requestInFlight) return
         requestInFlight = true
@@ -300,10 +320,10 @@ class MainActivity : Activity() {
     private fun apiBase(): String = apiBaseInput.text.toString().trim().trimEnd('/')
 
     private fun getInstallationId(): String {
-        val existing = preferences.getString(INSTALLATION_ID_KEY, null)
+        val existing = credentials.getInstallationId()
         if (existing != null) return existing
         val created = "android-${UUID.randomUUID()}"
-        preferences.edit().putString(INSTALLATION_ID_KEY, created).apply()
+        credentials.saveInstallationId(created)
         return created
     }
 
@@ -361,7 +381,6 @@ class MainActivity : Activity() {
 
     companion object {
         private const val PREFERENCES = "pulselink_fcm_test"
-        private const val INSTALLATION_ID_KEY = "installation_id"
         private const val NOTIFICATION_PERMISSION_REQUEST = 1001
     }
 }

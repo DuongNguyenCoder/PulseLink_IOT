@@ -65,7 +65,7 @@ function assertEquivalent(existing, incoming, deviceId) {
         throw new DeviceEventError("Event idempotency conflict", 409);
     }
 }
-export async function ingestDeviceEvent(db, token, input, receivedAt = new Date()) {
+export async function ingestDeviceEvent(db, token, input, receivedAt = new Date(), recipientMode = "legacy") {
     const device = await authenticateDevice(db, token);
     const createData = {
         eventId: input.eventId.toLowerCase(),
@@ -83,19 +83,43 @@ export async function ingestDeviceEvent(db, token, input, receivedAt = new Date(
             const created = await transaction.deviceEvent.create({
                 data: createData,
             });
-            const recipients = await transaction.staffPushToken.findMany({
-                where: {
-                    isActive: true,
-                    staff: { isActive: true, storeId: device.storeId },
-                },
-                select: { id: true },
-            });
+            const recipients = recipientMode === "account"
+                ? await transaction.appInstallation.findMany({
+                    where: {
+                        status: "ACTIVE",
+                        fcmTokenCiphertext: { not: null },
+                        fcmTokenFingerprint: { not: null },
+                        account: {
+                            status: "ACTIVE",
+                            memberships: {
+                                some: {
+                                    storeId: device.storeId,
+                                    status: "ACTIVE",
+                                    role: { in: ["OWNER", "STAFF"] },
+                                },
+                            },
+                        },
+                    },
+                    select: { id: true },
+                })
+                : await transaction.staffPushToken.findMany({
+                    where: {
+                        isActive: true,
+                        staff: { isActive: true, storeId: device.storeId },
+                    },
+                    select: { id: true },
+                });
             if (recipients.length > 0) {
                 await transaction.deviceNotification.createMany({
-                    data: recipients.map((recipient) => ({
-                        eventId: created.id,
-                        pushTokenId: recipient.id,
-                    })),
+                    data: recipientMode === "account"
+                        ? recipients.map((recipient) => ({
+                            eventId: created.id,
+                            appInstallationId: recipient.id,
+                        }))
+                        : recipients.map((recipient) => ({
+                            eventId: created.id,
+                            pushTokenId: recipient.id,
+                        })),
                     skipDuplicates: true,
                 });
             }

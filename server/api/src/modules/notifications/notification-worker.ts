@@ -8,8 +8,10 @@ import {
 export interface ClaimedNotificationJob {
   id: string;
   eventId: string;
-  pushTokenId: string;
+  pushTokenId: string | null;
+  appInstallationId: string | null;
   token: string;
+  tokenFingerprint: string | null;
   eventType: string;
   attempts: number;
   eventReceivedAt?: Date;
@@ -17,7 +19,10 @@ export interface ClaimedNotificationJob {
 }
 
 export interface NotificationQueueSnapshot {
-  counts: Record<"PENDING" | "PROCESSING" | "SENT" | "FAILED", number>;
+  counts: Record<
+    "PENDING" | "PROCESSING" | "SENT" | "FAILED" | "CANCELLED",
+    number
+  >;
   oldestPendingAt: Date | null;
   retryPendingCount: number;
   expiredLeaseCount: number;
@@ -34,6 +39,7 @@ export interface NotificationWorkerMetrics {
   retried: number;
   failed: number;
   invalidTokens: number;
+  cancelled: number;
   leaseRecoveries: number;
   lastProcessedAt: Date | null;
 }
@@ -48,12 +54,27 @@ export interface NotificationJobRepository {
   markRetry(id: string, nextAttemptAt: Date, reason: string): Promise<void>;
   markFailed(id: string, reason: string): Promise<void>;
   deactivateToken(pushTokenId: string, now: Date): Promise<void>;
+  revalidate?(job: ClaimedNotificationJob): Promise<NotificationEligibility>;
+  cancel?(id: string, reason: string): Promise<void>;
+  cancelIneligibleJobs?(now: Date): Promise<number>;
+  invalidateInstallationToken?(
+    installationId: string,
+    fingerprint: string | null,
+    now: Date,
+  ): Promise<void>;
   recordHeartbeat?(
     workerId: string,
     now: Date,
     lastProcessedAt?: Date,
   ): Promise<void>;
   getQueueSnapshot?(now: Date): Promise<NotificationQueueSnapshot>;
+}
+
+export interface NotificationEligibility {
+  eligible: boolean;
+  token?: string;
+  tokenFingerprint?: string | null;
+  reason?: string;
 }
 
 export interface NotificationWorkerLogger {
@@ -116,6 +137,7 @@ export class NotificationWorker {
     retried: 0,
     failed: 0,
     invalidTokens: 0,
+    cancelled: 0,
     leaseRecoveries: 0,
     lastProcessedAt: null,
   };
@@ -158,6 +180,7 @@ export class NotificationWorker {
       now,
       this.lastProcessedAt,
     );
+    await this.repository.cancelIneligibleJobs?.(now);
     const jobs = await this.repository.claim(
       this.options.concurrency,
       now,
@@ -188,9 +211,25 @@ export class NotificationWorker {
   }
 
   private async processJob(job: ClaimedNotificationJob): Promise<void> {
+    let tokenFingerprint = job.tokenFingerprint;
     try {
+      const eligibility = await this.repository.revalidate?.(job);
+      if (eligibility !== undefined && !eligibility.eligible) {
+        await this.repository.cancel?.(
+          job.id,
+          eligibility.reason ?? "recipient_no_longer_eligible",
+        );
+        this.metrics.cancelled += 1;
+        this.options.logger.info(
+          { notificationId: job.id, outcome: "cancelled" },
+          "Notification recipient is no longer eligible",
+        );
+        return;
+      }
+      const token = eligibility?.token ?? job.token;
+      tokenFingerprint = eligibility?.tokenFingerprint ?? job.tokenFingerprint;
       const messageId = await this.sender.send({
-        token: job.token,
+        token,
         data: {
           eventId: job.eventId,
           eventType: job.eventType,
@@ -218,10 +257,21 @@ export class NotificationWorker {
     } catch (error: unknown) {
       const reason = boundedReason(error);
       if (error instanceof InvalidFcmTokenError) {
-        await this.repository.deactivateToken(
-          job.pushTokenId,
-          this.options.now(),
-        );
+        if (
+          job.appInstallationId !== null &&
+          this.repository.invalidateInstallationToken !== undefined
+        ) {
+          await this.repository.invalidateInstallationToken(
+            job.appInstallationId,
+            tokenFingerprint,
+            this.options.now(),
+          );
+        } else if (job.pushTokenId !== null) {
+          await this.repository.deactivateToken(
+            job.pushTokenId,
+            this.options.now(),
+          );
+        }
         await this.repository.markFailed(job.id, reason);
         this.metrics.failed += 1;
         this.metrics.invalidTokens += 1;

@@ -26,10 +26,15 @@ export interface DeviceEventTransactionDatabase {
   staffPushToken: {
     findMany(args: unknown): Promise<Array<{ id: string }>>;
   };
+  appInstallation: {
+    findMany(args: unknown): Promise<Array<{ id: string }>>;
+  };
   deviceNotification: {
     createMany(args: unknown): Promise<{ count: number }>;
   };
 }
+
+export type NotificationRecipientMode = "legacy" | "account";
 
 export interface DeviceEventDatabase {
   device: ProvisioningDatabase["device"];
@@ -141,6 +146,7 @@ export async function ingestDeviceEvent(
   token: string,
   input: DeviceEventBody,
   receivedAt = new Date(),
+  recipientMode: NotificationRecipientMode = "legacy",
 ): Promise<AcceptedDeviceEvent> {
   const device = await authenticateDevice(
     db as unknown as ProvisioningDatabase,
@@ -163,20 +169,46 @@ export async function ingestDeviceEvent(
       const created = await transaction.deviceEvent.create({
         data: createData,
       });
-      const recipients = await transaction.staffPushToken.findMany({
-        where: {
-          isActive: true,
-          staff: { isActive: true, storeId: device.storeId },
-        },
-        select: { id: true },
-      });
+      const recipients =
+        recipientMode === "account"
+          ? await transaction.appInstallation.findMany({
+              where: {
+                status: "ACTIVE",
+                fcmTokenCiphertext: { not: null },
+                fcmTokenFingerprint: { not: null },
+                account: {
+                  status: "ACTIVE",
+                  memberships: {
+                    some: {
+                      storeId: device.storeId,
+                      status: "ACTIVE",
+                      role: { in: ["OWNER", "STAFF"] },
+                    },
+                  },
+                },
+              },
+              select: { id: true },
+            })
+          : await transaction.staffPushToken.findMany({
+              where: {
+                isActive: true,
+                staff: { isActive: true, storeId: device.storeId },
+              },
+              select: { id: true },
+            });
 
       if (recipients.length > 0) {
         await transaction.deviceNotification.createMany({
-          data: recipients.map((recipient) => ({
-            eventId: created.id,
-            pushTokenId: recipient.id,
-          })),
+          data:
+            recipientMode === "account"
+              ? recipients.map((recipient) => ({
+                  eventId: created.id,
+                  appInstallationId: recipient.id,
+                }))
+              : recipients.map((recipient) => ({
+                  eventId: created.id,
+                  pushTokenId: recipient.id,
+                })),
           skipDuplicates: true,
         });
       }

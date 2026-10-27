@@ -534,6 +534,216 @@ integrationDescribe("PostgreSQL schema and session integration", () => {
     expect(notifications).toHaveLength(1);
   });
 
+  it("creates Account/Membership/AppInstallation notification jobs atomically", async () => {
+    const storeId = await createStore();
+    const ownerId = await createAccount();
+    const staffAccountId = await createAccount();
+    await prisma.storeMembership.createMany({
+      data: [
+        { accountId: ownerId, storeId, role: "OWNER", status: "ACTIVE" },
+        { accountId: staffAccountId, storeId, role: "STAFF", status: "ACTIVE" },
+      ],
+    });
+    const ownerInstallationId = await createInstallation(ownerId);
+    const staffInstallationId = await createInstallation(staffAccountId);
+    const tokenlessInstallationId = `tokenless-${randomUUID()}`;
+    installationIds.add(tokenlessInstallationId);
+    await prisma.appInstallation.create({
+      data: {
+        id: tokenlessInstallationId,
+        accountId: ownerId,
+        platform: "ANDROID",
+      },
+    });
+
+    const deviceToken = `integration-account-device-${randomUUID()}`;
+    const device = await prisma.device.create({
+      data: {
+        deviceKey: `integration-account-device-${randomUUID()}`,
+        deviceSecretHash: hashDeviceToken(deviceToken),
+        name: "Integration account notification device",
+        status: "ONLINE",
+        provisioningState: "PROVISIONED",
+        enrollmentStatus: "ENROLLED",
+        storeId,
+      },
+      select: { id: true },
+    });
+    deviceIds.add(device.id);
+    const input: DeviceEventBody = {
+      eventId: randomUUID(),
+      type: "BUTTON_PRESSED",
+      occurredAt: "2026-10-15T14:00:00.000Z",
+      payload: { button: "account-mode" },
+    };
+    eventIds.add(input.eventId);
+
+    const accepted = await ingestDeviceEvent(
+      prisma as never,
+      deviceToken,
+      input,
+      new Date(),
+      "account",
+    );
+    await expect(
+      Promise.all([
+        ingestDeviceEvent(
+          prisma as never,
+          deviceToken,
+          input,
+          new Date(),
+          "account",
+        ),
+        ingestDeviceEvent(
+          prisma as never,
+          deviceToken,
+          input,
+          new Date(),
+          "account",
+        ),
+      ]),
+    ).resolves.toHaveLength(2);
+    const jobs = await prisma.deviceNotification.findMany({
+      where: { eventId: accepted.event.id },
+      select: { appInstallationId: true, pushTokenId: true },
+      orderBy: { appInstallationId: "asc" },
+    });
+    expect(jobs).toEqual(
+      [
+        { appInstallationId: ownerInstallationId, pushTokenId: null },
+        { appInstallationId: staffInstallationId, pushTokenId: null },
+      ].sort((left, right) =>
+        (left.appInstallationId ?? "").localeCompare(
+          right.appInstallationId ?? "",
+        ),
+      ),
+    );
+  });
+
+  it("claims and revalidates an Account installation job before FCM", async () => {
+    const storeId = await createStore();
+    const accountId = await createAccount();
+    await prisma.storeMembership.create({
+      data: { accountId, storeId, role: "OWNER", status: "ACTIVE" },
+    });
+    const installationId = randomUUID();
+    installationIds.add(installationId);
+    const fcmToken = `account-worker-${randomUUID()}`;
+    await registerInstallation(
+      prisma as never,
+      accountId,
+      { installationId, platform: "ANDROID", fcmToken },
+      fcmKeys,
+    );
+    const deviceToken = `integration-account-worker-device-${randomUUID()}`;
+    const device = await prisma.device.create({
+      data: {
+        deviceKey: `acct-worker-${randomUUID()}`,
+        deviceSecretHash: hashDeviceToken(deviceToken),
+        name: "Integration account worker device",
+        status: "ONLINE",
+        provisioningState: "PROVISIONED",
+        enrollmentStatus: "ENROLLED",
+        storeId,
+      },
+      select: { id: true },
+    });
+    deviceIds.add(device.id);
+    const input: DeviceEventBody = {
+      eventId: randomUUID(),
+      type: "BUTTON_PRESSED",
+      occurredAt: "2026-10-15T14:00:00.000Z",
+      payload: { button: "account-worker" },
+    };
+    eventIds.add(input.eventId);
+    await ingestDeviceEvent(
+      prisma as never,
+      deviceToken,
+      input,
+      new Date(),
+      "account",
+    );
+
+    const delivered: string[] = [];
+    const repository = new PrismaNotificationJobRepository(prisma, fcmKeys);
+    const worker = new NotificationWorker(repository, {
+      send: async ({ token }) => {
+        delivered.push(token);
+        return "integration-provider-message";
+      },
+    });
+    await expect(worker.processOnce()).resolves.toBe(1);
+    expect(delivered).toEqual([fcmToken]);
+    await expect(
+      prisma.deviceNotification.findFirst({
+        where: { event: { eventId: input.eventId } },
+        select: { status: true, appInstallationId: true },
+      }),
+    ).resolves.toEqual({ status: "SENT", appInstallationId: installationId });
+  });
+
+  it("cancels unsent Account jobs after membership revoke", async () => {
+    const storeId = await createStore();
+    const accountId = await createAccount();
+    const membership = await prisma.storeMembership.create({
+      data: { accountId, storeId, role: "STAFF", status: "ACTIVE" },
+    });
+    const installationId = randomUUID();
+    installationIds.add(installationId);
+    await registerInstallation(
+      prisma as never,
+      accountId,
+      {
+        installationId,
+        platform: "ANDROID",
+        fcmToken: `revoke-${randomUUID()}`,
+      },
+      fcmKeys,
+    );
+    const deviceToken = `integration-revoke-device-${randomUUID()}`;
+    const device = await prisma.device.create({
+      data: {
+        deviceKey: `revoke-${randomUUID()}`,
+        deviceSecretHash: hashDeviceToken(deviceToken),
+        name: "Integration revoke device",
+        status: "ONLINE",
+        provisioningState: "PROVISIONED",
+        enrollmentStatus: "ENROLLED",
+        storeId,
+      },
+      select: { id: true },
+    });
+    deviceIds.add(device.id);
+    const input: DeviceEventBody = {
+      eventId: randomUUID(),
+      type: "BUTTON_PRESSED",
+      occurredAt: "2026-10-15T14:00:00.000Z",
+    };
+    eventIds.add(input.eventId);
+    const accepted = await ingestDeviceEvent(
+      prisma as never,
+      deviceToken,
+      input,
+      new Date(),
+      "account",
+    );
+    await prisma.storeMembership.update({
+      where: { id: membership.id },
+      data: { status: "REVOKED", revokedAt: new Date() },
+    });
+    const repository = new PrismaNotificationJobRepository(prisma, fcmKeys);
+    const worker = new NotificationWorker(repository, {
+      send: async () => "should-not-send",
+    });
+    await expect(worker.processOnce()).resolves.toBe(0);
+    await expect(
+      prisma.deviceNotification.findFirst({
+        where: { eventId: accepted.event.id },
+        select: { status: true },
+      }),
+    ).resolves.toEqual({ status: "CANCELLED" });
+  });
+
   it("claims a notification job once when two workers race", async () => {
     const storeId = await createStore();
     const token = `integration-worker-device-${randomUUID()}`;

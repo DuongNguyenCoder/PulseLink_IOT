@@ -67,7 +67,7 @@ async function loadJwtKeys(): Promise<{
   }
 }
 
-function loadFcmKeys(): FcmKeyMaterial {
+export function loadFcmKeys(): FcmKeyMaterial {
   writeStartupLog("fcm-key.parse.start");
   const activeVersion = env.FCM_KEY_VERSION;
   if (activeVersion === undefined)
@@ -354,5 +354,6 @@ export async function createRuntimeOptions(): Promise<BuildAppOptions> {
     provisioning: {
       verificationKeys: jwt.verificationKeys,
     },
+    notificationRecipientMode: env.NOTIFICATION_RECIPIENT_MODE,
   };
 }

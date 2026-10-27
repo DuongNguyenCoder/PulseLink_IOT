@@ -19,11 +19,20 @@ class SecureCredentialStore(context: Context) {
             .apply()
     }
 
+    @Synchronized
     fun save(tokens: AuthTokens) {
         preferences.edit()
             .putString(ACCESS_KEY, encrypt(tokens.accessToken))
             .putString(REFRESH_KEY, encrypt(tokens.refreshToken))
+            .putLong(SESSION_GENERATION_KEY, getSessionGeneration() + 1)
             .apply()
+    }
+
+    @Synchronized
+    fun saveIfSameSession(tokens: AuthTokens, generation: Long): Boolean {
+        if (getSessionGeneration() != generation) return false
+        save(tokens)
+        return true
     }
 
     fun getAccessToken(): String? = decrypt(preferences.getString(ACCESS_KEY, null))
@@ -36,8 +45,38 @@ class SecureCredentialStore(context: Context) {
 
     fun getFcmToken(): String? = decrypt(preferences.getString(FCM_KEY, null))
 
+    fun saveApiBase(apiBase: String) {
+        preferences.edit().putString(API_BASE_KEY, apiBase.trim().trimEnd('/')).apply()
+    }
+
+    fun getApiBase(): String? = preferences.getString(API_BASE_KEY, null)
+
+    fun saveInstallationId(installationId: String) {
+        preferences.edit().putString(INSTALLATION_ID_KEY, installationId).apply()
+    }
+
+    fun getInstallationId(): String? = preferences.getString(INSTALLATION_ID_KEY, null)
+
+    @Synchronized
+    fun sessionSnapshot(): CredentialSnapshot = CredentialSnapshot(
+        accessToken = getAccessToken(),
+        refreshToken = getRefreshToken(),
+        fcmToken = getFcmToken(),
+        apiBase = getApiBase(),
+        installationId = getInstallationId(),
+        sessionGeneration = getSessionGeneration(),
+    )
+
+    @Synchronized
+    fun isSameSession(generation: Long): Boolean = getSessionGeneration() == generation
+
+    @Synchronized
     fun clear() {
-        preferences.edit().remove(ACCESS_KEY).remove(REFRESH_KEY).apply()
+        preferences.edit()
+            .remove(ACCESS_KEY)
+            .remove(REFRESH_KEY)
+            .putLong(SESSION_GENERATION_KEY, getSessionGeneration() + 1)
+            .apply()
     }
 
     private fun encrypt(value: String): String {
@@ -86,6 +125,21 @@ class SecureCredentialStore(context: Context) {
         private const val ACCESS_KEY = "access_token"
         private const val REFRESH_KEY = "refresh_token"
         private const val FCM_KEY = "fcm_token"
+        private const val API_BASE_KEY = "api_base_url"
+        private const val INSTALLATION_ID_KEY = "installation_id"
+        private const val SESSION_GENERATION_KEY = "session_generation"
         private const val TRANSFORMATION = "AES/GCM/NoPadding"
     }
+
+    private fun getSessionGeneration(): Long =
+        preferences.getLong(SESSION_GENERATION_KEY, 0L)
 }
+
+data class CredentialSnapshot(
+    val accessToken: String?,
+    val refreshToken: String?,
+    val fcmToken: String?,
+    val apiBase: String?,
+    val installationId: String?,
+    val sessionGeneration: Long,
+)

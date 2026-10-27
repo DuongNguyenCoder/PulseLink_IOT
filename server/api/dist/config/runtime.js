@@ -45,7 +45,7 @@ async function loadJwtKeys() {
         throw new Error("JWT key material could not be parsed");
     }
 }
-function loadFcmKeys() {
+export function loadFcmKeys() {
     writeStartupLog("fcm-key.parse.start");
     const activeVersion = env.FCM_KEY_VERSION;
     if (activeVersion === undefined)
@@ -284,5 +284,6 @@ export async function createRuntimeOptions() {
         provisioning: {
             verificationKeys: jwt.verificationKeys,
         },
+        notificationRecipientMode: env.NOTIFICATION_RECIPIENT_MODE,
     };
 }

@@ -8,12 +8,12 @@ function deviceToken(request) {
     }
     return authorization.replace(/^Bearer\s+/i, "");
 }
-export const deviceEventRoutes = async (app) => {
+export const deviceEventRoutes = async (app, options) => {
     app.post("/device-events", async (request, reply) => {
         const parsed = deviceEventBodySchema.safeParse(request.body);
         if (!parsed.success)
             throw new DeviceEventError("Invalid request", 400);
-        const result = await ingestDeviceEvent(app.prisma, deviceToken(request), parsed.data);
+        const result = await ingestDeviceEvent(app.prisma, deviceToken(request), parsed.data, new Date(), options.recipientMode ?? "legacy");
         request.log.info({
             requestId: request.id,
             eventId: result.event.eventId,

@@ -70,6 +70,7 @@ enum NotificationStatus {
   PROCESSING
   SENT
   FAILED
+  CANCELLED
 }
 
 enum AccountStatus {
@@ -203,6 +204,7 @@ model AppInstallation {
 
   account  Account   @relation(fields: [accountId], references: [id], onDelete: Restrict)
   sessions Session[]
+  notifications DeviceNotification[]
 
   // Required as the target of Session's composite relation. This prevents a
   // session from pairing an installation with a different account.
@@ -431,7 +433,8 @@ model StaffPushToken {
 model DeviceNotification {
   id            String             @id @default(cuid())
   eventId       String
-  pushTokenId   String
+  pushTokenId   String?
+  appInstallationId String?
   status        NotificationStatus @default(PENDING)
   attempts      Int                @default(0)
   nextAttemptAt DateTime           @default(now())
@@ -442,11 +445,14 @@ model DeviceNotification {
   createdAt     DateTime           @default(now())
   updatedAt     DateTime           @updatedAt
 
-  event     DeviceEvent    @relation(fields: [eventId], references: [id], onDelete: Restrict)
-  pushToken StaffPushToken @relation(fields: [pushTokenId], references: [id], onDelete: Restrict)
+  event          DeviceEvent     @relation(fields: [eventId], references: [id], onDelete: Restrict)
+  pushToken      StaffPushToken? @relation(fields: [pushTokenId], references: [id], onDelete: Restrict)
+  appInstallation AppInstallation? @relation(fields: [appInstallationId], references: [id], onDelete: Restrict)
 
   // Một sự kiện không tạo hai bản ghi gửi cho cùng một token
   @@unique([eventId, pushTokenId])
+  @@unique([eventId, appInstallationId])
+  @@index([appInstallationId])
   @@index([status, nextAttemptAt])
   @@index([status, leaseUntil])
 }
