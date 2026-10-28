@@ -26,6 +26,9 @@ class MainActivity : Activity() {
     private lateinit var countView: TextView
     private lateinit var authStatus: TextView
     private lateinit var backendStatus: TextView
+    private lateinit var storeIdInput: EditText
+    private lateinit var deviceNameInput: EditText
+    private lateinit var deviceStatus: TextView
     private lateinit var apiBaseInput: EditText
     private lateinit var emailInput: EditText
     private lateinit var passwordInput: EditText
@@ -128,6 +131,19 @@ class MainActivity : Activity() {
         backendStatus = statusText()
         root.addView(backendStatus)
         root.addView(actionButton("Register/refresh FCM token") { registerInstallation() })
+
+        root.addView(label("Owner device management"))
+        root.addView(label("Store and Device access is checked by the backend using the active Owner membership."))
+        storeIdInput = input("Store ID")
+        root.addView(storeIdInput)
+        deviceNameInput = input("New device name")
+        root.addView(deviceNameInput)
+        deviceStatus = statusText()
+        root.addView(deviceStatus)
+        root.addView(actionButton("List my Stores") { listStores() })
+        root.addView(actionButton("List Devices in Store") { listDevices() })
+        root.addView(actionButton("Register Device") { registerDevice() })
+        root.addView(label("Registration does not mean commissioned or connected. Physical enrollment and Wi-Fi provisioning require the device protocol."))
         return ScrollView(this).apply { addView(root) }
     }
 
@@ -248,6 +264,43 @@ class MainActivity : Activity() {
                 InstallationSyncOutcome.FAILED_RETRYABLE -> "Token registration could not reach the backend"
                 InstallationSyncOutcome.FAILED -> "FCM token registration failed"
             }
+        }
+    }
+
+    private fun listStores() {
+        runApi("Loading Stores…", deviceStatus) {
+            val token = credentials.getAccessToken() ?: throw ApiException(401, "UNAUTHENTICATED", "Sign in first")
+            val stores = ApiClient(apiBase()).listStores(token)
+            if (stores.isEmpty()) "No active Stores are available" else stores.joinToString("\n") { "${it.id}: ${it.name}" }
+        }
+    }
+
+    private fun listDevices() {
+        val storeId = storeIdInput.text.toString().trim()
+        if (storeId.isBlank()) {
+            deviceStatus.text = "Enter a Store ID"
+            return
+        }
+        runApi("Loading Devices…", deviceStatus) {
+            val token = credentials.getAccessToken() ?: throw ApiException(401, "UNAUTHENTICATED", "Sign in first")
+            val devices = ApiClient(apiBase()).listDevices(token, storeId)
+            if (devices.isEmpty()) "No Devices found for this Store" else devices.joinToString("\n") {
+                "${it.id}: ${it.name} — ${it.status}/${it.enrollmentStatus}/${it.provisioningState}"
+            }
+        }
+    }
+
+    private fun registerDevice() {
+        val storeId = storeIdInput.text.toString().trim()
+        val name = deviceNameInput.text.toString().trim()
+        if (storeId.isBlank() || name.isBlank()) {
+            deviceStatus.text = "Enter a Store ID and Device name"
+            return
+        }
+        runApi("Registering Device…", deviceStatus) {
+            val token = credentials.getAccessToken() ?: throw ApiException(401, "UNAUTHENTICATED", "Sign in first")
+            val device = ApiClient(apiBase()).registerDevice(token, storeId, name, null)
+            "Registered ${device.id}. State: ${device.status}/${device.enrollmentStatus}/${device.provisioningState}. Commissioning is not complete."
         }
     }
 

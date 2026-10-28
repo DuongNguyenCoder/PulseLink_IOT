@@ -16,3 +16,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "pulselink-fcm-test"
 include(":app")
+include(":owner")

@@ -96,6 +96,16 @@ enum MembershipStatus {
   REVOKED
 }
 
+enum OperatorGrantStatus {
+  ACTIVE
+  REVOKED
+}
+
+enum OperatorPermission {
+  DEVICES_READ
+  DEVICES_WRITE
+}
+
 enum SessionRevokeReason {
   LOGOUT
   ROTATED
@@ -130,6 +140,7 @@ model Store {
   memberships          StoreMembership[]
   auditEvents          AuditEvent[]
   provisioningSessions ProvisioningSession[]
+  operatorGrants       OperatorGrant[]
 
   @@index([isActive])
 }
@@ -178,6 +189,7 @@ model Account {
   memberships          StoreMembership[]
   tokens               AccountToken[]
   provisioningSessions ProvisioningSession[]
+  operatorGrants       OperatorGrant[]
 
   @@index([status])
 }
@@ -267,6 +279,27 @@ model StoreMembership {
   @@unique([accountId, storeId])
   @@index([accountId, status])
   @@index([storeId, status, role])
+}
+
+// Store-scoped operator capability. Grant provisioning remains controlled;
+// this model does not imply a public self-service grant endpoint.
+model OperatorGrant {
+  id          String                @id @default(cuid())
+  accountId   String
+  storeId     String
+  status      OperatorGrantStatus   @default(ACTIVE)
+  permissions OperatorPermission[]
+  grantedAt   DateTime              @default(now())
+  revokedAt   DateTime?
+  createdAt   DateTime              @default(now())
+  updatedAt   DateTime              @updatedAt
+
+  account Account @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  store   Store   @relation(fields: [storeId], references: [id], onDelete: Restrict)
+
+  @@unique([accountId, storeId])
+  @@index([storeId, status])
+  @@index([accountId, status])
 }
 
 // ================================

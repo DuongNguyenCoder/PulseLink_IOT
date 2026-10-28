@@ -74,6 +74,14 @@ export const MembershipStatus = {
     SUSPENDED: 'SUSPENDED',
     REVOKED: 'REVOKED'
 };
+export const OperatorGrantStatus = {
+    ACTIVE: 'ACTIVE',
+    REVOKED: 'REVOKED'
+};
+export const OperatorPermission = {
+    DEVICES_READ: 'DEVICES_READ',
+    DEVICES_WRITE: 'DEVICES_WRITE'
+};
 export const SessionRevokeReason = {
     LOGOUT: 'LOGOUT',
     ROTATED: 'ROTATED',

@@ -53,4 +53,29 @@ config PULSELINK_STATUS_LED_GPIO
     help
         Do not select a GPIO until the actual carrier-board schematic is confirmed.
 
+config PULSELINK_COMMISSIONING_ENABLED
+    bool "Enable physical commissioning gate (not yet implemented)"
+    default n
+    help
+        Keep disabled until the SoftAP protocol, trust bootstrap and board
+        verification are complete. This option does not enable SoftAP by itself.
+
+config PULSELINK_COMMISSIONING_BUTTON_GPIO
+    int "Commissioning button GPIO"
+    range -1 48
+    default 4
+    help
+        The project wiring currently identifies GPIO4 as the button-to-GND
+        input. Keep commissioning disabled until the board voltage, pull-up and
+        active level are measured on the actual carrier board.
+
+config PULSELINK_DEVICE_IDENTITY_NVS_PROVIDER
+    bool "Enable encrypted-NVS device identity provider"
+    default n
+    depends on NVS_ENCRYPTION
+    help
+        This provider requires encrypted NVS initialization and a reviewed
+        ESP32 security configuration. Keep disabled until factory key
+        provisioning and recovery semantics are approved.
+
 endmenu

@@ -4,9 +4,18 @@ import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URI
 import java.net.SocketTimeoutException
+import org.json.JSONArray
 import org.json.JSONObject
 
 data class AuthTokens(val accessToken: String, val refreshToken: String)
+data class StoreSummary(val id: String, val name: String, val slug: String)
+data class DeviceSummary(
+    val id: String,
+    val name: String,
+    val status: String,
+    val provisioningState: String,
+    val enrollmentStatus: String,
+)
 
 class ApiException(
     val statusCode: Int,
@@ -89,6 +98,56 @@ class ApiClient(baseUrl: String) {
         return data.optString("status", "registered")
     }
 
+    fun listStores(accessToken: String): List<StoreSummary> {
+        val data = getDataArray("/v1/stores", accessToken)
+        return buildList {
+            for (index in 0 until data.length()) {
+                val item = data.optJSONObject(index) ?: continue
+                val id = item.optString("id")
+                if (id.isNotBlank()) add(StoreSummary(id, item.optString("name"), item.optString("slug")))
+            }
+        }
+    }
+
+    fun listDevices(accessToken: String, storeId: String): List<DeviceSummary> {
+        val data = getDataArray("/v1/stores/${encodePath(storeId)}/devices", accessToken)
+        return buildList {
+            for (index in 0 until data.length()) {
+                val item = data.optJSONObject(index) ?: continue
+                val id = item.optString("id")
+                if (id.isNotBlank()) {
+                    add(
+                        DeviceSummary(
+                            id,
+                            item.optString("name"),
+                            item.optString("status"),
+                            item.optString("provisioningState"),
+                            item.optString("enrollmentStatus"),
+                        ),
+                    )
+                }
+            }
+        }
+    }
+
+    fun registerDevice(accessToken: String, storeId: String, name: String, firmwareVersion: String?): DeviceSummary {
+        val data = post(
+            "/v1/stores/${encodePath(storeId)}/devices",
+            JSONObject().apply {
+                put("name", name)
+                if (!firmwareVersion.isNullOrBlank()) put("firmwareVersion", firmwareVersion)
+            },
+            accessToken,
+        )
+        return DeviceSummary(
+            data.getString("id"),
+            data.getString("name"),
+            data.getString("status"),
+            data.getString("provisioningState"),
+            data.getString("enrollmentStatus"),
+        )
+    }
+
     private fun post(path: String, body: JSONObject, bearerToken: String? = null): JSONObject {
         val connection = (URI.create(baseUrl + path).toURL().openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
@@ -124,4 +183,38 @@ class ApiClient(baseUrl: String) {
             connection.disconnect()
         }
     }
+
+    private fun getDataArray(path: String, bearerToken: String): JSONArray {
+        val connection = (URI.create(baseUrl + path).toURL().openConnection() as HttpURLConnection).apply {
+            requestMethod = "GET"
+            connectTimeout = 10_000
+            readTimeout = 10_000
+            setRequestProperty("Authorization", "Bearer $bearerToken")
+        }
+        return try {
+            val status = connection.responseCode
+            val stream = if (status in 200..299) connection.inputStream else connection.errorStream
+            val response = stream?.bufferedReader()?.use { it.readText() }.orEmpty()
+            val json = runCatching { JSONObject(response) }.getOrNull()
+            if (status !in 200..299) {
+                val error = json?.optJSONObject("error")
+                throw ApiException(
+                    status,
+                    error?.optString("code")?.takeIf { it.isNotBlank() },
+                    error?.optString("message")?.takeIf { it.isNotBlank() } ?: "Request failed",
+                )
+            }
+            json?.optJSONArray("data") ?: JSONArray()
+        } catch (error: ApiException) {
+            throw error
+        } catch (_: SocketTimeoutException) {
+            throw ApiException(0, "TIMEOUT", "The request timed out. Check your connection and try again.")
+        } catch (_: IOException) {
+            throw ApiException(0, "NETWORK_ERROR", "Unable to connect to the backend. Check your connection and try again.")
+        } finally {
+            connection.disconnect()
+        }
+    }
+
+    private fun encodePath(value: String): String = java.net.URLEncoder.encode(value, Charsets.UTF_8.name())
 }

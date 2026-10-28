@@ -1,0 +1,5 @@
+# Compile-only validation profile for the encrypted-NVS identity-provider code.
+# This file does not provision NVS security keys, enable Secure Boot/Flash
+# Encryption, or make the resulting image suitable for flashing.
+CONFIG_NVS_ENCRYPTION=y
+CONFIG_PULSELINK_DEVICE_IDENTITY_NVS_PROVIDER=y

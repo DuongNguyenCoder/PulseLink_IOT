@@ -73,6 +73,7 @@ export const ModelName = {
     AppInstallation: 'AppInstallation',
     Session: 'Session',
     StoreMembership: 'StoreMembership',
+    OperatorGrant: 'OperatorGrant',
     AccountToken: 'AccountToken',
     Device: 'Device',
     ProvisioningSession: 'ProvisioningSession',
@@ -162,6 +163,17 @@ export const StoreMembershipScalarFieldEnum = {
     createdAt: 'createdAt',
     updatedAt: 'updatedAt',
     revokedAt: 'revokedAt'
+};
+export const OperatorGrantScalarFieldEnum = {
+    id: 'id',
+    accountId: 'accountId',
+    storeId: 'storeId',
+    status: 'status',
+    permissions: 'permissions',
+    grantedAt: 'grantedAt',
+    revokedAt: 'revokedAt',
+    createdAt: 'createdAt',
+    updatedAt: 'updatedAt'
 };
 export const AccountTokenScalarFieldEnum = {
     id: 'id',

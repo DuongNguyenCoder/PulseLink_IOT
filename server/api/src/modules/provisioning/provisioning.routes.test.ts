@@ -26,6 +26,17 @@ describe("provisioning route boundaries", () => {
     await app.close();
   });
 
+  it("does not expose Owner enrollment without an authenticated session", async () => {
+    const app = await createApp();
+    const response = await app.inject({
+      method: "POST",
+      url: "/stores/store-1/devices/device-1/enrollment",
+      payload: { publicKey: "not-a-key", keyVersion: 1 },
+    });
+    expect(response.statusCode).toBe(401);
+    await app.close();
+  });
+
   it("validates enrollment and redeem payloads before service access", async () => {
     const app = await createApp();
     const enrollment = await app.inject({

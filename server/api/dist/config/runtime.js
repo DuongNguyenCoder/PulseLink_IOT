@@ -260,9 +260,6 @@ export async function createRuntimeOptions() {
     if (env.NODE_ENV === "production") {
         required("HEALTH_DIAGNOSTICS_TOKEN", healthDiagnosticsToken);
     }
-    if (env.OPERATOR_ENROLLMENT_ENABLED) {
-        throw new Error("Operator enrollment is enabled but no authorizer implementation is configured");
-    }
     const jwt = await loadJwtKeys();
     const fcmKeys = loadFcmKeys();
     const { limiter: loginRateLimiter, close: closeLoginRateLimiter } = await createLoginRateLimiter();
@@ -283,6 +280,7 @@ export async function createRuntimeOptions() {
         installations: { verificationKeys: jwt.verificationKeys, fcmKeys },
         provisioning: {
             verificationKeys: jwt.verificationKeys,
+            operatorEnrollmentEnabled: env.OPERATOR_ENROLLMENT_ENABLED,
         },
         notificationRecipientMode: env.NOTIFICATION_RECIPIENT_MODE,
     };

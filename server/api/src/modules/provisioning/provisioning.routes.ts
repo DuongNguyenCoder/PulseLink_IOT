@@ -10,6 +10,7 @@ import {
   listProvisioningSessions,
   redeemProvisioningSession,
   revokeDeviceEnrollment,
+  requireOwner,
   type EnrollmentActor,
   type ProvisioningDatabase,
   ProvisioningError,
@@ -21,6 +22,10 @@ const sessionParams = z.object({
   sessionId: z.string().min(1).max(128),
 });
 const deviceParams = z.object({ deviceId: z.string().min(1).max(128) });
+const ownerDeviceParams = z.object({
+  storeId: z.string().min(1).max(128),
+  deviceId: z.string().min(1).max(128),
+});
 const deviceSessionParams = z.object({
   deviceId: z.string().min(1).max(128),
   sessionId: z.string().min(1).max(128),
@@ -46,6 +51,7 @@ const redeemBody = z.object({
 export interface ProvisioningRouteOptions {
   verificationKeys: ReadonlyMap<string, KeyInput>;
   enrollmentAuthorizer?: (request: FastifyRequest) => Promise<EnrollmentActor>;
+  operatorEnrollmentEnabled?: boolean;
 }
 
 function accountId(request: FastifyRequest): string {
@@ -133,6 +139,46 @@ export const provisioningRoutes: FastifyPluginAsync<
             session: result.session,
             bootstrapSecret: result.bootstrapSecret,
             challenge: result.challenge,
+          },
+          meta: { requestId: request.id },
+        });
+      },
+    );
+
+    protectedApp.post(
+      "/stores/:storeId/devices/:deviceId/enrollment",
+      async (request, reply) => {
+        const params = parseOrThrow(
+          ownerDeviceParams.safeParse(request.params),
+        );
+        const body = parseOrThrow(enrollmentBody.safeParse(request.body));
+        const ownerAccountId = accountId(request);
+        await requireOwner(
+          app.prisma as unknown as ProvisioningDatabase,
+          ownerAccountId,
+          params.storeId,
+        );
+        const device = await app.prisma.device.findUnique({
+          where: { id: params.deviceId },
+          select: { id: true, storeId: true },
+        });
+        if (device === null || device.storeId !== params.storeId) {
+          throw new ProvisioningError("Resource not found", 404);
+        }
+        const enrolled = await enrollDevice(
+          app.prisma as unknown as ProvisioningDatabase,
+          { actorId: ownerAccountId, actorType: "ACCOUNT" },
+          params.deviceId,
+          body,
+          request.id,
+        );
+        return reply.code(200).send({
+          data: {
+            deviceId: enrolled.id,
+            storeId: enrolled.storeId,
+            enrollmentStatus: enrolled.enrollmentStatus,
+            provisioningState: enrolled.provisioningState,
+            enrollmentKeyVersion: enrolled.enrollmentKeyVersion,
           },
           meta: { requestId: request.id },
         });

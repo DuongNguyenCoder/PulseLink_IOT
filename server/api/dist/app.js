@@ -6,6 +6,8 @@ import { storeRoutes, } from "./modules/stores/store.routes.js";
 import { installationRoutes, } from "./modules/installations/installation.routes.js";
 import { provisioningRoutes, } from "./modules/provisioning/provisioning.routes.js";
 import { deviceEventRoutes } from "./modules/device-events/device-event.routes.js";
+import { deviceRoutes } from "./modules/devices/device.routes.js";
+import { createOperatorEnrollmentAuthorizer } from "./modules/provisioning/operator-authorization.js";
 import { emailVerificationRoutes, registerVerificationFormParser, } from "./modules/auth/email-verification.routes.js";
 import { registerPrisma } from "./plugins/prisma.js";
 import { mapErrorToApiResponse } from "./shared/error-contract.js";
@@ -51,12 +53,22 @@ export async function buildApp(options) {
         ...options.stores,
         prefix: "/v1/stores",
     });
+    await app.register(deviceRoutes, {
+        verificationKeys: options.stores.verificationKeys,
+        prefix: "/v1/stores",
+    });
     await app.register(installationRoutes, {
         ...options.installations,
         prefix: "/v1/installations",
     });
+    const provisioningOptions = { ...options.provisioning };
+    if (provisioningOptions.operatorEnrollmentEnabled === true &&
+        provisioningOptions.enrollmentAuthorizer === undefined) {
+        provisioningOptions.enrollmentAuthorizer =
+            createOperatorEnrollmentAuthorizer(app.prisma, provisioningOptions.verificationKeys);
+    }
     await app.register(provisioningRoutes, {
-        ...options.provisioning,
+        ...provisioningOptions,
         prefix: "/v1",
     });
     await app.register(deviceEventRoutes, {

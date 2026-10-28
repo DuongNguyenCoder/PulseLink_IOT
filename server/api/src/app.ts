@@ -19,6 +19,8 @@ import {
   type ProvisioningRouteOptions,
 } from "./modules/provisioning/provisioning.routes.js";
 import { deviceEventRoutes } from "./modules/device-events/device-event.routes.js";
+import { deviceRoutes } from "./modules/devices/device.routes.js";
+import { createOperatorEnrollmentAuthorizer } from "./modules/provisioning/operator-authorization.js";
 import {
   emailVerificationRoutes,
   registerVerificationFormParser,
@@ -80,12 +82,27 @@ export async function buildApp(options: BuildAppOptions) {
     ...options.stores,
     prefix: "/v1/stores",
   });
+  await app.register(deviceRoutes, {
+    verificationKeys: options.stores.verificationKeys,
+    prefix: "/v1/stores",
+  });
   await app.register(installationRoutes, {
     ...options.installations,
     prefix: "/v1/installations",
   });
+  const provisioningOptions = { ...options.provisioning };
+  if (
+    provisioningOptions.operatorEnrollmentEnabled === true &&
+    provisioningOptions.enrollmentAuthorizer === undefined
+  ) {
+    provisioningOptions.enrollmentAuthorizer =
+      createOperatorEnrollmentAuthorizer(
+        app.prisma as never,
+        provisioningOptions.verificationKeys,
+      );
+  }
   await app.register(provisioningRoutes, {
-    ...options.provisioning,
+    ...provisioningOptions,
     prefix: "/v1",
   });
   await app.register(deviceEventRoutes, {
