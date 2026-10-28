@@ -25,6 +25,7 @@ describe("device event route", () => {
         callback: (transaction: unknown) => Promise<unknown>,
       ) =>
         callback({
+          device: { updateMany: async () => ({ count: 1 }) },
           deviceEvent: {
             create: async () => ({
               id: "event-row-a",
@@ -87,6 +88,7 @@ describe("device event route", () => {
         callback: (transaction: unknown) => Promise<unknown>,
       ) =>
         callback({
+          device: { updateMany: async () => ({ count: 1 }) },
           deviceEvent: {
             create: async () => ({
               id: "event-row-account-mode",

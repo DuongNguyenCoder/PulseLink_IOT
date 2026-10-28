@@ -26,14 +26,14 @@ describe("provisioning route boundaries", () => {
     await app.close();
   });
 
-  it("does not expose Owner enrollment without an authenticated session", async () => {
+  it("does not expose self-service Owner enrollment; Device keys require operator proof", async () => {
     const app = await createApp();
     const response = await app.inject({
       method: "POST",
       url: "/stores/store-1/devices/device-1/enrollment",
       payload: { publicKey: "not-a-key", keyVersion: 1 },
     });
-    expect(response.statusCode).toBe(401);
+    expect(response.statusCode).toBe(404);
     await app.close();
   });
 

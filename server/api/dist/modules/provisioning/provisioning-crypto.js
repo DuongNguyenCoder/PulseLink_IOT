@@ -41,8 +41,47 @@ export function isSupportedEnrollmentPublicKey(publicKeySpkiBase64) {
             format: 'der',
             type: 'spki',
         });
-        return publicKey.asymmetricKeyType === 'ec'
+        return Buffer.from(publicKeySpkiBase64, 'base64').toString('base64') === publicKeySpkiBase64
+            && publicKey.asymmetricKeyType === 'ec'
             && publicKey.asymmetricKeyDetails?.namedCurve === 'prime256v1';
+    }
+    catch {
+        return false;
+    }
+}
+export function canonicalDeviceEnrollmentPayload(input) {
+    return Buffer.from([
+        'pulselink-device-enrollment-v1',
+        input.deviceKey,
+        String(input.proof.keyVersion),
+        input.proof.publicKeySpkiBase64,
+        input.proof.challenge,
+        String(input.proof.expiresAt),
+    ].join('\n'), 'utf8');
+}
+export function verifyDeviceEnrollmentProof(input) {
+    try {
+        const { proof } = input;
+        const challengeBytes = Buffer.from(proof.challenge, 'base64url');
+        const signature = Buffer.from(proof.signatureDerBase64, 'base64');
+        const expiresAt = new Date(proof.expiresAt * 1000);
+        const now = input.now ?? new Date();
+        if (!Number.isSafeInteger(proof.keyVersion) || proof.keyVersion < 1 ||
+            !Number.isSafeInteger(proof.expiresAt) ||
+            challengeBytes.length !== 32 || challengeBytes.toString('base64url') !== proof.challenge ||
+            signature.length < 8 || signature.length > 80 ||
+            signature.toString('base64') !== proof.signatureDerBase64 ||
+            !Number.isFinite(expiresAt.getTime()) ||
+            expiresAt.getTime() <= now.getTime() ||
+            expiresAt.getTime() > now.getTime() + 5 * 60_000 ||
+            !isSupportedEnrollmentPublicKey(proof.publicKeySpkiBase64))
+            return false;
+        const publicKey = createPublicKey({
+            key: Buffer.from(proof.publicKeySpkiBase64, 'base64'),
+            format: 'der',
+            type: 'spki',
+        });
+        return verify('sha256', canonicalDeviceEnrollmentPayload({ deviceKey: input.deviceKey, proof }), { key: publicKey, dsaEncoding: 'der' }, signature);
     }
     catch {
         return false;

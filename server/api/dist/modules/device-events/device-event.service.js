@@ -83,6 +83,19 @@ export async function ingestDeviceEvent(db, token, input, receivedAt = new Date(
             const created = await transaction.deviceEvent.create({
                 data: createData,
             });
+            const stillAuthorized = await transaction.device.updateMany({
+                where: {
+                    id: device.id,
+                    deviceSecretHash: device.deviceSecretHash,
+                    status: { not: "DISABLED" },
+                    enrollmentStatus: "ENROLLED",
+                    provisioningState: "PROVISIONED",
+                },
+                data: { status: "ONLINE", lastSeenAt: receivedAt },
+            });
+            if (stillAuthorized.count !== 1) {
+                throw new DeviceEventError("Device authentication failed", 401);
+            }
             const recipients = recipientMode === "account"
                 ? await transaction.appInstallation.findMany({
                     where: {

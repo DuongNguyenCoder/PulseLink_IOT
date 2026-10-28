@@ -1,16 +1,12 @@
 import { z } from "zod";
 import { createAuthenticationHook } from "../auth/auth-hook.js";
-import { cancelProvisioningSession, createProvisioningSession, enrollDevice, getProvisioningSession, listProvisioningSessions, redeemProvisioningSession, revokeDeviceEnrollment, requireOwner, ProvisioningError, } from "./provisioning.service.js";
+import { cancelProvisioningSession, createProvisioningSession, enrollDevice, getProvisioningSession, listProvisioningSessions, redeemProvisioningSession, revokeDeviceEnrollment, ProvisioningError, } from "./provisioning.service.js";
 const storeParams = z.object({ storeId: z.string().min(1).max(128) });
 const sessionParams = z.object({
     storeId: z.string().min(1).max(128),
     sessionId: z.string().min(1).max(128),
 });
 const deviceParams = z.object({ deviceId: z.string().min(1).max(128) });
-const ownerDeviceParams = z.object({
-    storeId: z.string().min(1).max(128),
-    deviceId: z.string().min(1).max(128),
-});
 const deviceSessionParams = z.object({
     deviceId: z.string().min(1).max(128),
     sessionId: z.string().min(1).max(128),
@@ -20,12 +16,19 @@ const createSessionBody = z.object({
     idempotencyKey: z.string().min(16).max(128),
 });
 const enrollmentBody = z.object({
-    publicKey: z
+    publicKeySpkiBase64: z
         .string()
         .min(32)
         .max(2048)
         .regex(/^[A-Za-z0-9+/]+={0,2}$/),
     keyVersion: z.number().int().min(1).max(1_000_000),
+    challenge: z.string().length(43).regex(/^[A-Za-z0-9_-]{43}$/),
+    expiresAt: z.number().int().positive(),
+    signatureDerBase64: z
+        .string()
+        .min(12)
+        .max(108)
+        .regex(/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/),
 });
 const redeemBody = z.object({
     bootstrapSecret: z.string().min(32).max(256),
@@ -81,30 +84,7 @@ export const provisioningRoutes = async (app, options) => {
                     session: result.session,
                     bootstrapSecret: result.bootstrapSecret,
                     challenge: result.challenge,
-                },
-                meta: { requestId: request.id },
-            });
-        });
-        protectedApp.post("/stores/:storeId/devices/:deviceId/enrollment", async (request, reply) => {
-            const params = parseOrThrow(ownerDeviceParams.safeParse(request.params));
-            const body = parseOrThrow(enrollmentBody.safeParse(request.body));
-            const ownerAccountId = accountId(request);
-            await requireOwner(app.prisma, ownerAccountId, params.storeId);
-            const device = await app.prisma.device.findUnique({
-                where: { id: params.deviceId },
-                select: { id: true, storeId: true },
-            });
-            if (device === null || device.storeId !== params.storeId) {
-                throw new ProvisioningError("Resource not found", 404);
-            }
-            const enrolled = await enrollDevice(app.prisma, { actorId: ownerAccountId, actorType: "ACCOUNT" }, params.deviceId, body, request.id);
-            return reply.code(200).send({
-                data: {
-                    deviceId: enrolled.id,
-                    storeId: enrolled.storeId,
-                    enrollmentStatus: enrolled.enrollmentStatus,
-                    provisioningState: enrolled.provisioningState,
-                    enrollmentKeyVersion: enrolled.enrollmentKeyVersion,
+                    deviceEnrollmentPublicKey: result.deviceEnrollmentPublicKey,
                 },
                 meta: { requestId: request.id },
             });

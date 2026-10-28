@@ -43,6 +43,7 @@ import {
 } from "../modules/installations/installation.service.js";
 import { revokeRefreshSession } from "../modules/auth/session.service.js";
 import {
+  canonicalDeviceEnrollmentPayload,
   canonicalProvisioningPayload,
   hashDeviceToken,
 } from "../modules/provisioning/provisioning-crypto.js";
@@ -1084,13 +1085,27 @@ integrationDescribe("PostgreSQL schema and session integration", () => {
     const publicKeySpkiBase64 = publicKey
       .export({ type: "spki", format: "der" })
       .toString("base64");
+    const enrollmentProofBody = {
+      publicKeySpkiBase64,
+      keyVersion: 1,
+      challenge: randomBytes(32).toString("base64url"),
+      expiresAt: Math.floor(Date.now() / 1000) + 120,
+    };
+    const enrollmentProof = {
+      ...enrollmentProofBody,
+      signatureDerBase64: sign(
+        "sha256",
+        canonicalDeviceEnrollmentPayload({ deviceKey: device.deviceKey, proof: enrollmentProofBody }),
+        { key: privateKey, dsaEncoding: "der" },
+      ).toString("base64"),
+    };
 
     await expect(
       enrollDevice(
         prisma as unknown as ProvisioningDatabase,
         { actorId: "commissioning-tool", actorType: "SYSTEM" },
         device.id,
-        { publicKey: publicKeySpkiBase64, keyVersion: 1 },
+        enrollmentProof,
       ),
     ).resolves.toMatchObject({
       enrollmentStatus: "ENROLLED",
@@ -1101,7 +1116,7 @@ integrationDescribe("PostgreSQL schema and session integration", () => {
         prisma as unknown as ProvisioningDatabase,
         { actorId: "commissioning-tool", actorType: "SYSTEM" },
         device.id,
-        { publicKey: publicKeySpkiBase64, keyVersion: 1 },
+        enrollmentProof,
       ),
     ).rejects.toMatchObject({ statusCode: 409 });
 
@@ -1159,6 +1174,56 @@ integrationDescribe("PostgreSQL schema and session integration", () => {
     ).rejects.toMatchObject({ statusCode: 401 });
   });
 
+  it("rejects reuse of one identity public key across multiple Devices", async () => {
+    const storeId = await createStore();
+    const first = await prisma.device.create({
+      data: {
+        deviceKey: `device-${randomUUID()}`,
+        deviceSecretHash: "initial-device-secret-hash",
+        name: "First unique-key fixture",
+        storeId,
+      },
+    });
+    const second = await prisma.device.create({
+      data: {
+        deviceKey: `device-${randomUUID()}`,
+        deviceSecretHash: "initial-device-secret-hash",
+        name: "Second unique-key fixture",
+        storeId,
+      },
+    });
+    deviceIds.add(first.id);
+    deviceIds.add(second.id);
+    const { privateKey, publicKey } = generateKeyPairSync("ec", {
+      namedCurve: "prime256v1",
+    });
+    const publicKeySpkiBase64 = publicKey
+      .export({ type: "spki", format: "der" })
+      .toString("base64");
+    const makeProof = (deviceKey: string) => {
+      const proofBody = {
+        publicKeySpkiBase64,
+        keyVersion: 1,
+        challenge: randomBytes(32).toString("base64url"),
+        expiresAt: Math.floor(Date.now() / 1000) + 120,
+      };
+      return {
+        ...proofBody,
+        signatureDerBase64: sign(
+          "sha256",
+          canonicalDeviceEnrollmentPayload({ deviceKey, proof: proofBody }),
+          { key: privateKey, dsaEncoding: "der" },
+        ).toString("base64"),
+      };
+    };
+    const db = prisma as unknown as ProvisioningDatabase;
+    await enrollDevice(db, { actorId: "factory-operator" }, first.id, makeProof(first.deviceKey));
+    await expect(enrollDevice(db, { actorId: "factory-operator" }, second.id, makeProof(second.deviceKey)))
+      .rejects.toMatchObject({ statusCode: 409 });
+    await expect(prisma.device.findUniqueOrThrow({ where: { id: second.id } }))
+      .resolves.toMatchObject({ enrollmentStatus: "UNENROLLED", enrollmentPublicKey: null });
+  });
+
   it("does not allow a non-owner to create a provisioning session and locks concurrent wrong attempts at five", async () => {
     const ownerId = await createAccount();
     const otherAccountId = await createAccount();
@@ -1175,18 +1240,29 @@ integrationDescribe("PostgreSQL schema and session integration", () => {
       },
     });
     deviceIds.add(device.id);
-    const { publicKey } = generateKeyPairSync("ec", {
+    const { privateKey, publicKey } = generateKeyPairSync("ec", {
       namedCurve: "prime256v1",
     });
+    const publicKeySpkiBase64 = publicKey
+      .export({ type: "spki", format: "der" })
+      .toString("base64");
+    const enrollmentProofBody = {
+      publicKeySpkiBase64,
+      keyVersion: 1,
+      challenge: randomBytes(32).toString("base64url"),
+      expiresAt: Math.floor(Date.now() / 1000) + 120,
+    };
     await enrollDevice(
       prisma as unknown as ProvisioningDatabase,
       { actorId: "commissioning-tool" },
       device.id,
       {
-        publicKey: publicKey
-          .export({ type: "spki", format: "der" })
-          .toString("base64"),
-        keyVersion: 1,
+        ...enrollmentProofBody,
+        signatureDerBase64: sign(
+          "sha256",
+          canonicalDeviceEnrollmentPayload({ deviceKey: device.deviceKey, proof: enrollmentProofBody }),
+          { key: privateKey, dsaEncoding: "der" },
+        ).toString("base64"),
       },
     );
     await expect(

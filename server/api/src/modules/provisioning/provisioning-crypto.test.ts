@@ -1,11 +1,13 @@
-import { generateKeyPairSync, sign } from 'node:crypto';
+import { generateKeyPairSync, randomBytes, sign } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import {
   canonicalProvisioningPayload,
+  canonicalDeviceEnrollmentPayload,
   hashBootstrapValue,
   hashChallenge,
   isSupportedEnrollmentPublicKey,
   verifyEnrollmentSignature,
+  verifyDeviceEnrollmentProof,
 } from './provisioning-crypto.js';
 
 describe('provisioning crypto contract', () => {
@@ -34,5 +36,41 @@ describe('provisioning crypto contract', () => {
     expect(verifyEnrollmentSignature({ ...input, publicKeySpkiBase64, signatureDerBase64: signature })).toBe(true);
     expect(verifyEnrollmentSignature({ ...input, deviceKey: 'other-device', publicKeySpkiBase64, signatureDerBase64: signature })).toBe(false);
     expect(verifyEnrollmentSignature({ ...input, challenge: 'other-challenge', publicKeySpkiBase64, signatureDerBase64: signature })).toBe(false);
+  });
+
+  it('verifies a short-lived device-bound enrollment proof and rejects mutation or expiry', () => {
+    const now = new Date('2026-10-28T10:00:00.000Z');
+    const proofBody = {
+      publicKeySpkiBase64,
+      keyVersion: 3,
+      challenge: randomBytes(32).toString('base64url'),
+      expiresAt: Math.floor(now.getTime() / 1000) + 120,
+    };
+    const proof = {
+      ...proofBody,
+      signatureDerBase64: sign(
+        'sha256',
+        canonicalDeviceEnrollmentPayload({ deviceKey: 'device-enrollment-1', proof: proofBody }),
+        { key: privateKey, dsaEncoding: 'der' },
+      ).toString('base64'),
+    };
+
+    expect(verifyDeviceEnrollmentProof({ deviceKey: 'device-enrollment-1', proof, now })).toBe(true);
+    expect(verifyDeviceEnrollmentProof({ deviceKey: 'other-device', proof, now })).toBe(false);
+    expect(verifyDeviceEnrollmentProof({
+      deviceKey: 'device-enrollment-1',
+      proof: { ...proof, challenge: randomBytes(32).toString('base64url') },
+      now,
+    })).toBe(false);
+    expect(verifyDeviceEnrollmentProof({
+      deviceKey: 'device-enrollment-1',
+      proof: { ...proof, expiresAt: Math.floor(now.getTime() / 1000) - 1 },
+      now,
+    })).toBe(false);
+    expect(verifyDeviceEnrollmentProof({
+      deviceKey: 'device-enrollment-1',
+      proof: { ...proof, signatureDerBase64: Buffer.from('tampered').toString('base64') },
+      now,
+    })).toBe(false);
   });
 });

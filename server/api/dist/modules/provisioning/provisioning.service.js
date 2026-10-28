@@ -1,6 +1,6 @@
 import { Prisma } from "../../generated/prisma/client.js";
 import { writeAuditEvent } from "../../shared/audit.js";
-import { generateBootstrapValue, generateChallenge, generateOperationalToken, hashBootstrapValue, hashChallenge, hashDeviceToken, isSupportedEnrollmentPublicKey, verifyEnrollmentSignature, } from "./provisioning-crypto.js";
+import { generateBootstrapValue, generateChallenge, generateOperationalToken, hashBootstrapValue, hashChallenge, hashDeviceToken, isSupportedEnrollmentPublicKey, verifyDeviceEnrollmentProof, verifyEnrollmentSignature, } from "./provisioning-crypto.js";
 export class ProvisioningError extends Error {
     statusCode;
     constructor(message, statusCode) {
@@ -45,8 +45,8 @@ export async function requireOwner(db, accountId, storeId) {
     if (membership === null)
         throw new ProvisioningError("Resource not found", 404);
 }
-export async function enrollDevice(db, actor, deviceId, input, requestId, now = new Date()) {
-    if (!isSupportedEnrollmentPublicKey(input.publicKey)) {
+export async function enrollDevice(db, actor, deviceId, proof, requestId, now = new Date()) {
+    if (!isSupportedEnrollmentPublicKey(proof.publicKeySpkiBase64)) {
         throw new ProvisioningError("Unsupported enrollment public key", 400);
     }
     try {
@@ -54,22 +54,37 @@ export async function enrollDevice(db, actor, deviceId, input, requestId, now = 
             const device = await tx.device.findUnique({ where: { id: deviceId } });
             if (device === null)
                 throw new ProvisioningError("Resource not found", 404);
+            if (!verifyDeviceEnrollmentProof({ deviceKey: device.deviceKey, proof, now })) {
+                throw new ProvisioningError("Device enrollment proof is invalid", 401);
+            }
             if (device.status === "DISABLED" ||
                 device.enrollmentStatus !== "UNENROLLED" ||
                 device.provisioningState === "REVOKED") {
                 throw new ProvisioningError("Device is already enrolled", 409);
             }
-            const updated = await tx.device.update({
-                where: { id: deviceId },
+            const claimed = await tx.device.updateMany({
+                where: {
+                    id: deviceId,
+                    deviceKey: device.deviceKey,
+                    status: { not: "DISABLED" },
+                    enrollmentStatus: "UNENROLLED",
+                    provisioningState: { not: "REVOKED" },
+                },
                 data: {
-                    enrollmentPublicKey: input.publicKey,
-                    enrollmentKeyVersion: input.keyVersion,
+                    enrollmentPublicKey: proof.publicKeySpkiBase64,
+                    enrollmentKeyVersion: proof.keyVersion,
                     enrollmentStatus: "ENROLLED",
                     provisioningState: "READY",
                     enrolledAt: now,
                     enrollmentRevokedAt: null,
                 },
             });
+            if (claimed.count !== 1) {
+                throw new ProvisioningError("Device enrollment conflicts with current state", 409);
+            }
+            const updated = await tx.device.findUnique({ where: { id: deviceId } });
+            if (updated === null)
+                throw new ProvisioningError("Resource not found", 404);
             await writeAuditEvent(tx, {
                 actorType: actor.actorType ?? "SYSTEM",
                 actorId: actor.actorId,
@@ -80,7 +95,7 @@ export async function enrollDevice(db, actor, deviceId, input, requestId, now = 
                 requestId,
                 metadata: {
                     deviceId,
-                    keyVersion: input.keyVersion,
+                    keyVersion: proof.keyVersion,
                     outcome: "success",
                 },
                 occurredAt: now,
@@ -143,6 +158,9 @@ export async function createProvisioningSession(db, accountId, storeId, input, r
                 device.provisioningState === "REVOKED") {
                 throw new ProvisioningError("Device is not available for provisioning", 409);
             }
+            if (device.enrollmentPublicKey === null) {
+                throw new ProvisioningError("Device identity is not available for provisioning", 409);
+            }
             const session = await tx.provisioningSession.create({
                 data: {
                     deviceId: input.deviceId,
@@ -166,9 +184,14 @@ export async function createProvisioningSession(db, accountId, storeId, input, r
                 metadata: { accountId, deviceId: input.deviceId, outcome: "success" },
                 occurredAt: now,
             });
-            return session;
+            return { session, deviceEnrollmentPublicKey: device.enrollmentPublicKey };
         });
-        return { session: safeSession(result), bootstrapSecret, challenge };
+        return {
+            session: safeSession(result.session),
+            bootstrapSecret,
+            challenge,
+            deviceEnrollmentPublicKey: result.deviceEnrollmentPublicKey,
+        };
     }
     catch (error) {
         if (error instanceof ProvisioningError)

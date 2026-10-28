@@ -50,6 +50,7 @@ function database(
   overrides: Partial<{
     create: (args: unknown) => Promise<DeviceEventRecord>;
     findUnique: (args: unknown) => Promise<DeviceEventRecord | null>;
+    updateMany: (args: unknown) => Promise<{ count: number }>;
   }> = {},
 ): DeviceEventDatabase {
   return {
@@ -63,6 +64,7 @@ function database(
       ) => Promise<unknown>,
     ) =>
       callback({
+        device: { updateMany: overrides.updateMany ?? (async () => ({ count: 1 })) },
         deviceEvent: { create: overrides.create ?? (async () => record()) },
         staffPushToken: { findMany: async () => [] },
         deviceNotification: { createMany: async () => ({ count: 0 }) },
@@ -84,8 +86,13 @@ describe("device event ingestion", () => {
   it("writes a new event with server receivedAt and preserves occurredAt", async () => {
     const receivedAt = new Date("2026-10-15T14:00:02.000Z");
     let args: unknown;
+    let deviceUpdate: unknown;
     const result = await ingestDeviceEvent(
       database({
+        updateMany: async (value) => {
+          deviceUpdate = value;
+          return { count: 1 };
+        },
         create: async (value) => {
           args = value;
           return record({ receivedAt });
@@ -100,6 +107,18 @@ describe("device event ingestion", () => {
     expect(args).toMatchObject({
       data: { occurredAt: new Date(input.occurredAt), receivedAt },
     });
+    expect(deviceUpdate).toMatchObject({
+      where: { id: device.id, deviceSecretHash: device.deviceSecretHash },
+      data: { status: "ONLINE", lastSeenAt: receivedAt },
+    });
+  });
+
+  it("does not accept or retain an event if the device is revoked during commit", async () => {
+    await expect(ingestDeviceEvent(
+      database({ updateMany: async () => ({ count: 0 }) }),
+      "device-token",
+      input,
+    )).rejects.toMatchObject({ statusCode: 401 });
   });
 
   it("returns an equivalent duplicate without creating another event", async () => {

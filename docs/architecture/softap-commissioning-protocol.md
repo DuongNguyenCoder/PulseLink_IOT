@@ -1,6 +1,6 @@
 # PulseLink SoftAP Commissioning Protocol
 
-Status: **CONTRACT DRAFT — NOT IMPLEMENTED / NOT PRODUCTION READY**
+Status: **PROTOCOL BASELINE IMPLEMENTED FOR TRANSCRIPT TESTING; TRANSPORT NOT IMPLEMENTED / NOT PRODUCTION READY**
 
 This document records the security boundary for the approved ESP32-S3 SoftAP
 commissioning transport. It is intentionally not an assertion that the current
@@ -44,6 +44,13 @@ The physical button (or an equivalent hardware signal confirmed for the exact
 board) is a mandatory gate before `SOFTAP_ACTIVE`. Device ID, serial number,
 SSID/BSSID, local IP address and a known URL are not possession proofs.
 
+The transport-independent controller is implemented in
+`firmware/esp32/main/commissioning_state.c`. It enforces lifecycle transitions,
+deadline expiry, cancellation and a consume-once session marker, but it is not
+connected to SoftAP, Wi-Fi credentials or a backend redemption client. Host
+tests prove controller behavior only; they do not prove transport security or
+device runtime behavior.
+
 ## Required transport security before implementation
 
 The transport must provide all of the following before Wi-Fi credentials can
@@ -64,18 +71,56 @@ stored, how Android authenticates the intended device, how key rotation works,
 and how a SoftAP impersonation attempt is rejected. Android must not trust a
 SoftAP merely because it has the expected SSID.
 
-## Message contract placeholder
+## Versioned handshake baseline
 
-No message schema is approved yet. A future versioned envelope must include a
-protocol version, commissioning context identifier, message sequence or nonce,
-authenticated device binding and an integrity/authentication value. It must
-not include access tokens, raw operational credentials, private keys or
-secrets in logs, analytics, QR contents or navigation arguments.
+The public transcript encoder is implemented in
+`firmware/esp32/main/commissioning_protocol.c` and mirrored by
+`CommissioningTranscript.java`. It uses network-byte-order fields:
+
+```text
+u32(domain length) | domain = "pulselink-softap-commissioning-v1"
+u16(protocol version = 1)
+u32 + sessionId
+u32 + deviceKey SPKI DER
+u32 + backend challenge/session context
+u64 + expiresAt epoch seconds
+u32 + client context
+u32 + client nonce
+u32 + device nonce
+u32 + client ephemeral P-256 public key
+u32 + device ephemeral P-256 public key
+```
+
+The proposed handshake is:
+
+```text
+Owner -> Device: HELLO(version, sessionId, clientNonce, clientContext,
+                        clientEphemeralPublicKey)
+Device -> Owner: DEVICE_HELLO(deviceNonce, deviceEphemeralPublicKey,
+                               enrolledDeviceKey, expiresAt, signature)
+Owner -> Device: ENCRYPTED_WIFI_CONFIG(direction, sequence, ciphertext, tag)
+Device -> Owner: ACK(direction, sequence, status)
+```
+
+The Device signature covers the complete transcript and is verified against
+the Owner-enrolled public key obtained through the authenticated backend flow.
+The ECDH shared secret is proposed as input to HKDF-SHA-256 with info
+`pulselink-softap-session-v1`; the first 16 bytes are proposed as the
+AES-128-GCM key. GCM uses a 12-byte nonce formed from a direction identifier
+and a monotonically increasing 64-bit sequence number. These parameters are a
+versioned implementation baseline, not evidence that the transport is already
+implemented or hardware-ready.
 
 The Wi-Fi credential payload must be encrypted and authenticated for the
 intended device. The device must acknowledge receipt without echoing the
 password. The Android client must clear sensitive state when the flow is
-cancelled or expires.
+cancelled or expires. No access token, operational credential, private key or
+session key belongs in logs, analytics, QR data or navigation arguments.
+
+The transport remains blocked until the encrypted-NVS identity path and target
+hardware trust anchor are available. The current C/Android code only tests
+transcript compatibility; it does not implement ECDH, HKDF, AES-GCM, SoftAP or
+credential exchange.
 
 ## Recovery rules
 

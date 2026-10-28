@@ -338,7 +338,7 @@ model Device {
   status               DeviceStatus            @default(PENDING)
   provisioningState    DeviceProvisioningState @default(UNREGISTERED)
   enrollmentStatus     DeviceEnrollmentStatus  @default(UNENROLLED)
-  enrollmentPublicKey  String?                 @db.Text
+  enrollmentPublicKey  String?                 @unique @db.Text
   enrollmentKeyVersion Int?
   enrolledAt           DateTime?
   enrollmentRevokedAt  DateTime?

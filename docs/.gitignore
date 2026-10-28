@@ -1,2 +1,8 @@
 /testing/
-/audits/
+!/audits/
+/audits/*
+!/audits/wp14-engineering-log.md
+!/audits/wp14-9-end-to-end-commissioning-report.md
+!/audits/wp14-31-full-commissioning-implementation-report.md
+!/audits/wp14-32-enrollment-storage-e2e-closure-report.md
+!/audits/wp14-33-37-commissioning-readiness-report.md

@@ -20,6 +20,7 @@ import {
 } from "./modules/provisioning/provisioning.routes.js";
 import { deviceEventRoutes } from "./modules/device-events/device-event.routes.js";
 import { deviceRoutes } from "./modules/devices/device.routes.js";
+import { deviceStatusRoutes } from "./modules/device-status/device-status.routes.js";
 import { createOperatorEnrollmentAuthorizer } from "./modules/provisioning/operator-authorization.js";
 import {
   emailVerificationRoutes,
@@ -110,6 +111,7 @@ export async function buildApp(options: BuildAppOptions) {
     recipientMode:
       options.notificationRecipientMode ?? env.NOTIFICATION_RECIPIENT_MODE,
   });
+  await app.register(deviceStatusRoutes, { prefix: "/v1" });
   app.addHook("onClose", async () => {
     await options.close?.();
   });

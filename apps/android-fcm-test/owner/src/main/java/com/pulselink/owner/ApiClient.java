@@ -2,7 +2,9 @@ package com.pulselink.owner;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.URI;
 import java.net.URLEncoder;
@@ -35,6 +37,10 @@ final class ApiClient {
     JSONObject createDevice(String access, String storeId, String name) throws Exception {
         return post("/v1/stores/" + path(storeId) + "/devices", json("name", name), access);
     }
+    JSONObject createProvisioningSession(String access, String storeId, String deviceId, String idempotencyKey) throws Exception {
+        JSONObject body = json("deviceId", deviceId, "idempotencyKey", idempotencyKey);
+        return post("/v1/stores/" + path(storeId) + "/provisioning-sessions", body, access);
+    }
     private JSONObject get(String path, String access) throws Exception { return request("GET", path, null, access); }
     private JSONObject post(String path, JSONObject body, String access) throws Exception { return request("POST", path, body, access); }
     private JSONObject request(String method, String path, JSONObject body, String access) throws Exception {
@@ -50,7 +56,7 @@ final class ApiClient {
             }
             int status = connection.getResponseCode();
             var stream = status >= 200 && status < 300 ? connection.getInputStream() : connection.getErrorStream();
-            String text = stream == null ? "" : new String(stream.readAllBytes(), StandardCharsets.UTF_8);
+            String text = stream == null ? "" : readBody(stream);
             JSONObject response = text.isBlank() ? new JSONObject() : new JSONObject(text);
             if (status < 200 || status >= 300) {
                 JSONObject error = response.optJSONObject("error");
@@ -59,6 +65,13 @@ final class ApiClient {
             return response;
         } catch (ApiError error) { throw error; } catch (IOException error) { throw new ApiError(0, "Network error or timeout"); }
         finally { connection.disconnect(); }
+    }
+    static String readBody(InputStream stream) throws IOException {
+        ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+        byte[] chunk = new byte[4096];
+        int count;
+        while ((count = stream.read(chunk)) != -1) buffer.write(chunk, 0, count);
+        return buffer.toString(StandardCharsets.UTF_8.name());
     }
     private static JSONObject json(String... values) throws Exception { JSONObject result = new JSONObject(); for (int i=0;i<values.length;i+=2) result.put(values[i], values[i+1]); return result; }
     private static String path(String value) { return URLEncoder.encode(value, StandardCharsets.UTF_8); }

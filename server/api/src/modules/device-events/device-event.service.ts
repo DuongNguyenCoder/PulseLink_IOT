@@ -20,6 +20,9 @@ export interface DeviceEventRecord {
 }
 
 export interface DeviceEventTransactionDatabase {
+  device: {
+    updateMany(args: unknown): Promise<{ count: number }>;
+  };
   deviceEvent: {
     create(args: unknown): Promise<DeviceEventRecord>;
   };
@@ -169,6 +172,19 @@ export async function ingestDeviceEvent(
       const created = await transaction.deviceEvent.create({
         data: createData,
       });
+      const stillAuthorized = await transaction.device.updateMany({
+        where: {
+          id: device.id,
+          deviceSecretHash: device.deviceSecretHash,
+          status: { not: "DISABLED" },
+          enrollmentStatus: "ENROLLED",
+          provisioningState: "PROVISIONED",
+        },
+        data: { status: "ONLINE", lastSeenAt: receivedAt },
+      });
+      if (stillAuthorized.count !== 1) {
+        throw new DeviceEventError("Device authentication failed", 401);
+      }
       const recipients =
         recipientMode === "account"
           ? await transaction.appInstallation.findMany({

@@ -25,6 +25,14 @@ config PULSELINK_BACKEND_URL
         Local HTTP smoke-test URL, for example http://192.168.1.171:3000/health/live.
         Do not put credentials or tokens in this URL. Leave empty to disable the test.
 
+config PULSELINK_REDEMPTION_BASE_URL
+    string "Provisioning redemption HTTPS base URL"
+    default ""
+    help
+        HTTPS origin for the existing /v1/devices/.../redeem endpoint.
+        Do not include credentials or tokens. Leave empty until the protected
+        operational-credential storage policy is approved.
+
 config PULSELINK_EVENT_ENDPOINT_URL
     string "Device event HTTPS endpoint"
     default ""
@@ -56,6 +64,7 @@ config PULSELINK_STATUS_LED_GPIO
 config PULSELINK_COMMISSIONING_ENABLED
     bool "Enable physical commissioning gate (not yet implemented)"
     default n
+    select MBEDTLS_HKDF_C
     help
         Keep disabled until the SoftAP protocol, trust bootstrap and board
         verification are complete. This option does not enable SoftAP by itself.
@@ -77,5 +86,13 @@ config PULSELINK_DEVICE_IDENTITY_NVS_PROVIDER
         This provider requires encrypted NVS initialization and a reviewed
         ESP32 security configuration. Keep disabled until factory key
         provisioning and recovery semantics are approved.
+
+config PULSELINK_OPERATIONAL_CREDENTIAL_STORAGE
+    bool "Enable protected operational credential storage adapter"
+    default n
+    depends on NVS_ENCRYPTION
+    help
+        Keep disabled until a reviewed encrypted-NVS implementation and
+        hardware provisioning/recovery procedure exist.
 
 endmenu

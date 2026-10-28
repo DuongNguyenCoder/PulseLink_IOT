@@ -7,6 +7,7 @@ import { installationRoutes, } from "./modules/installations/installation.routes
 import { provisioningRoutes, } from "./modules/provisioning/provisioning.routes.js";
 import { deviceEventRoutes } from "./modules/device-events/device-event.routes.js";
 import { deviceRoutes } from "./modules/devices/device.routes.js";
+import { deviceStatusRoutes } from "./modules/device-status/device-status.routes.js";
 import { createOperatorEnrollmentAuthorizer } from "./modules/provisioning/operator-authorization.js";
 import { emailVerificationRoutes, registerVerificationFormParser, } from "./modules/auth/email-verification.routes.js";
 import { registerPrisma } from "./plugins/prisma.js";
@@ -75,6 +76,7 @@ export async function buildApp(options) {
         prefix: "/v1",
         recipientMode: options.notificationRecipientMode ?? env.NOTIFICATION_RECIPIENT_MODE,
     });
+    await app.register(deviceStatusRoutes, { prefix: "/v1" });
     app.addHook("onClose", async () => {
         await options.close?.();
     });
