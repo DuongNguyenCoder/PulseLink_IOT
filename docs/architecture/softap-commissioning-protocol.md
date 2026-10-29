@@ -1,10 +1,45 @@
 # PulseLink SoftAP Commissioning Protocol
 
-Status: **PROTOCOL BASELINE IMPLEMENTED FOR TRANSCRIPT TESTING; TRANSPORT NOT IMPLEMENTED / NOT PRODUCTION READY**
+Status: **MVP CLAIM PROOF AND SOFTAP TRANSPORT SOURCE IMPLEMENTED; OPERATIONAL STORAGE AND HARDWARE RUNTIME NOT VERIFIED**
 
-This document records the security boundary for the approved ESP32-S3 SoftAP
-commissioning transport. It is intentionally not an assertion that the current
-firmware or Android application implements this protocol.
+This document records the security boundary and current implementation for the
+ESP32-S3 SoftAP commissioning transport. Source/build evidence does not imply
+hardware commissioning or secure-at-rest credential storage.
+
+## Current implementation (WP14-RUN-038)
+
+- Public Device IDs use `pl-` followed by the lowercase hex STA base MAC. The
+  ID is stable identification only; it is neither secret nor proof of
+  authenticity.
+- An authenticated active Store OWNER creates
+  `POST /v1/stores/{storeId}/device-claims` with Device ID and display name.
+  The backend returns a five-minute challenge bound to that account, Store and
+  Device ID. Completion uses
+  `POST /v1/stores/{storeId}/device-claims/{claimSessionId}/complete`.
+- During the physical commissioning window, the board serves
+  `POST /v1/commissioning/enrollment-proof` over SoftAP. It checks the supplied
+  Device ID against its STA base MAC and signs
+  `pulselink-device-claim-v1` with P-256 ECDSA/SHA-256. The canonical UTF-8
+  payload is newline-separated: domain, Device ID, Store ID, claim session ID,
+  key version, base64 SPKI, challenge, expiry seconds. C, Java and TypeScript
+  compare the same public fixture. The backend verifies the proof and
+  transactionally consumes the claim before creating the Store-scoped
+  ENROLLED Device. Device ID primary-key and unique public-key constraints
+  prevent a second Store from winning a concurrent claim. Repeating a claim
+  for the same active Device in the same Store is idempotent.
+- Android derives the SoftAP SSID from the scanned MAC-based ID, requests the
+  proof, verifies signature/context locally, and submits it to the backend.
+  SoftAP HTTP success does not complete Store linking. Existing encrypted
+  commissioning handshake remains the Wi-Fi credential path.
+- This is first-claim proof-of-possession/TOFU. With no manufacturing root,
+  there is no proof that the key came from a genuine ESP32-S3; a rogue first
+  claimant may race, and raw NVS extraction can clone identity. The identity
+  provider is opt-in and ordinary NVS is not confidentiality protection. Do
+  not describe it as hardware attestation or protected storage.
+- Operational credential storage is not registered and the readiness gate
+  remains fail-closed. Redemption-to-ONLINE/Event is therefore not complete.
+  Board identity, button wiring, SoftAP, Wi-Fi, reboot recovery and physical
+  E2E remain NOT VERIFIED.
 
 ## Existing backend contract
 

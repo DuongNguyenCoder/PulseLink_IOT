@@ -23,6 +23,12 @@ describe("provisioning route boundaries", () => {
       url: "/stores/store-1/provisioning-sessions",
     });
     expect(response.statusCode).toBe(401);
+    const claim = await app.inject({
+      method: "POST",
+      url: "/stores/store-1/device-claims",
+      payload: { deviceId: "pl-0123456789ab", name: "Button" },
+    });
+    expect(claim.statusCode).toBe(401);
     await app.close();
   });
 

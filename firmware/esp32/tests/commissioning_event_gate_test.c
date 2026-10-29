@@ -34,7 +34,11 @@ int main(void) {
     memcpy(fake.value, "event-token", 11U); fake.length = 11U;
 
     commissioning_init(&lifecycle);
+    memset(token, 0xA5, sizeof(token));
+    length = 77U;
     assert(commissioning_event_gate_load_token(&lifecycle, &storage, token, sizeof(token), &length) == COMMISSIONING_EVENT_GATE_NOT_ONLINE);
+    assert(length == 0U);
+    for (size_t i = 0U; i < sizeof(token); i++) assert(token[i] == 0U);
     online(&lifecycle);
     assert(commissioning_event_gate_load_token(&lifecycle, &storage, token, sizeof(token), &length) == COMMISSIONING_EVENT_GATE_OK);
     assert(length == 11U && memcmp(token, "event-token", 11U) == 0);

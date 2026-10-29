@@ -13,6 +13,8 @@ typedef enum {
     COMMISSIONING_REDEEM_EXPIRED,
     COMMISSIONING_REDEEM_MALFORMED,
     COMMISSIONING_REDEEM_STORAGE_UNAVAILABLE,
+    COMMISSIONING_REDEEM_STORAGE_INVALID,
+    COMMISSIONING_REDEEM_STORAGE_IO_ERROR,
 } commissioning_redeem_result_t;
 
 commissioning_redeem_result_t commissioning_redeem_and_store(

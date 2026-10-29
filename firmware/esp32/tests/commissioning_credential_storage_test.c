@@ -31,6 +31,14 @@ int main(void) {
     uint8_t loaded[256] = { 0 };
     size_t loaded_length = 0U;
     commissioning_credential_storage_t unavailable = { 0 };
+    const uint8_t test_token[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopA";
+    assert(sizeof(test_token) - 1U == 43U);
+    assert(commissioning_credential_token_format_valid(test_token, sizeof(test_token) - 1U));
+    const uint8_t noncanonical_token[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopB";
+    assert(!commissioning_credential_token_format_valid(noncanonical_token, sizeof(noncanonical_token) - 1U));
+    assert(!commissioning_credential_token_format_valid(test_token, sizeof(test_token) - 2U));
+    const uint8_t invalid_token[43] = { '!' };
+    assert(!commissioning_credential_token_format_valid(invalid_token, sizeof(invalid_token)));
     assert(!commissioning_credential_storage_is_ready(&unavailable));
     assert(commissioning_credential_storage_save(&unavailable, value, 10U) == COMMISSIONING_STORAGE_UNAVAILABLE);
 
@@ -52,9 +60,11 @@ int main(void) {
     loaded_length = 10U;
     assert(commissioning_credential_storage_load(&storage, loaded, sizeof(loaded), &loaded_length) == COMMISSIONING_STORAGE_IO_ERROR);
     assert(loaded_length == 0U);
+    for (size_t i = 0U; i < sizeof(loaded); i++) assert(loaded[i] == 0U);
     loaded_length = 10U;
     assert(commissioning_credential_storage_load(&storage, loaded, sizeof(loaded) - 1U, &loaded_length) == COMMISSIONING_STORAGE_INVALID);
     assert(loaded_length == 0U);
+    for (size_t i = 0U; i < sizeof(loaded) - 1U; i++) assert(loaded[i] == 0U);
     assert(commissioning_credential_storage_save(&storage, NULL, 1U) == COMMISSIONING_STORAGE_INVALID);
     return 0;
 }

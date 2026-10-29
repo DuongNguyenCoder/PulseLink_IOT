@@ -140,6 +140,7 @@ model Store {
   memberships          StoreMembership[]
   auditEvents          AuditEvent[]
   provisioningSessions ProvisioningSession[]
+  deviceClaimSessions DeviceClaimSession[]
   operatorGrants       OperatorGrant[]
 
   @@index([isActive])
@@ -189,6 +190,7 @@ model Account {
   memberships          StoreMembership[]
   tokens               AccountToken[]
   provisioningSessions ProvisioningSession[]
+  deviceClaimSessions DeviceClaimSession[]
   operatorGrants       OperatorGrant[]
 
   @@index([status])
@@ -389,6 +391,27 @@ model ProvisioningSession {
   @@index([deviceId, status, expiresAt])
   @@index([actorAccountId, createdAt])
   @@index([storeId, status, expiresAt])
+}
+
+// A short-lived Owner-authorized first-claim challenge. No Device row or
+// Store ownership is created until a Device identity proves possession.
+model DeviceClaimSession {
+  id                String    @id @default(cuid())
+  deviceId          String    @db.VarChar(128)
+  storeId           String
+  actorAccountId    String
+  name              String    @db.VarChar(120)
+  challengeHash     String    @db.VarChar(64)
+  expiresAt         DateTime
+  consumedAt        DateTime?
+  createdAt         DateTime  @default(now())
+
+  store   Store   @relation(fields: [storeId], references: [id], onDelete: Restrict)
+  actor   Account @relation(fields: [actorAccountId], references: [id], onDelete: Restrict)
+
+  @@index([deviceId, expiresAt, consumedAt])
+  @@index([storeId, createdAt])
+  @@index([actorAccountId, createdAt])
 }
 
 // ================================

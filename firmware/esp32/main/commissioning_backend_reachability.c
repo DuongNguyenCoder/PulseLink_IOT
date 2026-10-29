@@ -61,7 +61,10 @@ void commissioning_backend_reachability_complete(
         if (!commissioning_wifi_controller_mark_backend_online(reachability->wifi_controller, generation)) {
             (void)commissioning_wifi_controller_fail(reachability->wifi_controller, generation);
         }
-    } else {
+    } else if (!commissioning_wifi_controller_is_backend_recovery(reachability->wifi_controller) ||
+        result == COMMISSIONING_BACKEND_PROBE_AUTH_FAILURE ||
+        result == COMMISSIONING_BACKEND_PROBE_MALFORMED ||
+        result == COMMISSIONING_BACKEND_PROBE_CANCELLED) {
         (void)commissioning_wifi_controller_fail(reachability->wifi_controller, generation);
     }
 }

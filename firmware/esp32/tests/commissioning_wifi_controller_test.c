@@ -79,10 +79,30 @@ static void test_cancel_cleans_up(void) {
     assert(fake.disconnect_calls == 1);
 }
 
+static void test_backend_recovery_survives_wifi_disconnect_but_not_stale_success(void) {
+    commissioning_context_t lifecycle;
+    fake_wifi_t fake = { .configure_ok = true, .connect_ok = true };
+    commissioning_wifi_controller_t controller;
+    commissioning_init(&lifecycle);
+    assert(commissioning_begin_backend_recovery(&lifecycle, 100U));
+    controller = make_controller(&lifecycle, &fake);
+    assert(commissioning_wifi_controller_start_backend_recovery(&controller, 100U));
+    uint32_t generation = commissioning_wifi_controller_generation(&controller);
+    assert(commissioning_wifi_controller_is_backend_recovery(&controller));
+    commissioning_wifi_controller_on_event(&controller, generation,
+        COMMISSIONING_WIFI_EVENT_DISCONNECTED, 200U);
+    assert(commissioning_state(&lifecycle) == COMMISSIONING_CREDENTIAL_PERSISTING);
+    assert(commissioning_wifi_controller_is_active(&controller));
+    assert(!commissioning_wifi_controller_mark_backend_online(&controller, generation + 1U));
+    assert(commissioning_wifi_controller_mark_backend_online(&controller, generation));
+    assert(commissioning_state(&lifecycle) == COMMISSIONING_ONLINE);
+}
+
 int main(void) {
     test_success_requires_backend_online();
     test_stale_event_and_retry_exhaustion();
     test_cancel_cleans_up();
+    test_backend_recovery_survives_wifi_disconnect_but_not_stale_success();
     return 0;
 }
 

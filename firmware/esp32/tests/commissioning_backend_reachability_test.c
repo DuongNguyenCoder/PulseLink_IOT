@@ -75,6 +75,45 @@ int main(void) {
     commissioning_backend_reachability_complete(&reachability, generation, COMMISSIONING_BACKEND_PROBE_OK);
     assert(commissioning_state(&lifecycle) == COMMISSIONING_ONLINE);
 
+    commissioning_init(&lifecycle);
+    assert(commissioning_begin_backend_recovery(&lifecycle, 100U));
+    assert(commissioning_wifi_controller_init(&wifi, &lifecycle, &wifi_ops, NULL, 2U, 1U, 4U));
+    assert(commissioning_wifi_controller_start_backend_recovery(&wifi, 100U));
+    generation = commissioning_wifi_controller_generation(&wifi);
+    assert(commissioning_backend_reachability_init(&reachability, &wifi, &storage, &probe_ops, &probe));
+    assert(commissioning_backend_reachability_start(&reachability, generation));
+    commissioning_backend_reachability_complete(&reachability, generation, COMMISSIONING_BACKEND_PROBE_NETWORK_ERROR);
+    assert(commissioning_state(&lifecycle) == COMMISSIONING_CREDENTIAL_PERSISTING);
+    assert(commissioning_wifi_controller_is_active(&wifi));
+    assert(commissioning_backend_reachability_start(&reachability, generation));
+    commissioning_backend_reachability_complete(&reachability, generation, COMMISSIONING_BACKEND_PROBE_OK);
+    assert(commissioning_state(&lifecycle) == COMMISSIONING_ONLINE);
+
+    commissioning_init(&lifecycle);
+    assert(commissioning_begin_backend_recovery(&lifecycle, 100U));
+    assert(commissioning_wifi_controller_init(&wifi, &lifecycle, &wifi_ops, NULL, 2U, 1U, 4U));
+    assert(commissioning_wifi_controller_start_backend_recovery(&wifi, 100U));
+    generation = commissioning_wifi_controller_generation(&wifi);
+    assert(commissioning_backend_reachability_init(&reachability, &wifi, &storage, &probe_ops, &probe));
+    assert(commissioning_backend_reachability_start(&reachability, generation));
+    commissioning_backend_reachability_complete(&reachability, generation, COMMISSIONING_BACKEND_PROBE_NETWORK_ERROR);
+    assert(commissioning_state(&lifecycle) == COMMISSIONING_CREDENTIAL_PERSISTING);
+    assert(commissioning_wifi_controller_is_active(&wifi));
+    assert(commissioning_backend_reachability_start(&reachability, generation));
+    commissioning_backend_reachability_complete(&reachability, generation, COMMISSIONING_BACKEND_PROBE_OK);
+    assert(commissioning_state(&lifecycle) == COMMISSIONING_ONLINE);
+
+    commissioning_init(&lifecycle);
+    assert(commissioning_begin_backend_recovery(&lifecycle, 100U));
+    assert(commissioning_wifi_controller_init(&wifi, &lifecycle, &wifi_ops, NULL, 2U, 1U, 4U));
+    assert(commissioning_wifi_controller_start_backend_recovery(&wifi, 100U));
+    generation = commissioning_wifi_controller_generation(&wifi);
+    assert(commissioning_backend_reachability_init(&reachability, &wifi, &storage, &probe_ops, &probe));
+    assert(commissioning_backend_reachability_start(&reachability, generation));
+    commissioning_backend_reachability_complete(&reachability, generation, COMMISSIONING_BACKEND_PROBE_AUTH_FAILURE);
+    assert(commissioning_state(&lifecycle) == COMMISSIONING_FAILED);
+    assert(!commissioning_wifi_controller_is_active(&wifi));
+
     return 0;
 }
 

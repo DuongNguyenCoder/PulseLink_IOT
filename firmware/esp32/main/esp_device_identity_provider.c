@@ -4,7 +4,7 @@
 
 #include "sdkconfig.h"
 
-#if CONFIG_PULSELINK_DEVICE_IDENTITY_NVS_PROVIDER && CONFIG_NVS_ENCRYPTION
+#if CONFIG_PULSELINK_DEVICE_IDENTITY_NVS_PROVIDER
 
 #include <string.h>
 
@@ -17,6 +17,7 @@
 #include "nvs.h"
 
 #define IDENTITY_KEY_NAME "key_record"
+#define IDENTITY_INITIALIZED_NAME "initialized"
 #define IDENTITY_KEY_MAGIC 0x504C4B31U
 #define IDENTITY_KEY_MAX_DER 512U
 
@@ -26,6 +27,11 @@ typedef struct {
     uint32_t der_length;
     uint8_t der[IDENTITY_KEY_MAX_DER];
 } identity_key_record_t;
+
+static void clear_sensitive(void *value, size_t length) {
+    volatile uint8_t *bytes = value;
+    while (length-- > 0U) *bytes++ = 0U;
+}
 
 static esp_err_t setup_rng(mbedtls_entropy_context *entropy, mbedtls_ctr_drbg_context *drbg) {
     static const unsigned char personalization[] = "pulselink-device-identity";
@@ -46,8 +52,16 @@ static device_key_provider_result_t load_record(
     if (err != ESP_OK) return err == ESP_ERR_NVS_NOT_FOUND ? DEVICE_KEY_PROVIDER_NOT_FOUND : DEVICE_KEY_PROVIDER_IO_ERROR;
     size_t length = sizeof(*record);
     err = nvs_get_blob(handle, IDENTITY_KEY_NAME, record, &length);
+    if (err == ESP_ERR_NVS_NOT_FOUND) {
+        uint8_t initialized = 0U;
+        esp_err_t marker_err = nvs_get_u8(handle, IDENTITY_INITIALIZED_NAME, &initialized);
+        nvs_close(handle);
+        if (marker_err == ESP_ERR_NVS_NOT_FOUND) return DEVICE_KEY_PROVIDER_NOT_FOUND;
+        if (marker_err != ESP_OK) return DEVICE_KEY_PROVIDER_IO_ERROR;
+        (void)initialized;
+        return DEVICE_KEY_PROVIDER_CORRUPT;
+    }
     nvs_close(handle);
-    if (err == ESP_ERR_NVS_NOT_FOUND) return DEVICE_KEY_PROVIDER_NOT_FOUND;
     if (err != ESP_OK) return DEVICE_KEY_PROVIDER_IO_ERROR;
     if (length != sizeof(*record) || record->magic != IDENTITY_KEY_MAGIC ||
         record->version == 0U || record->der_length == 0U ||
@@ -73,6 +87,7 @@ static device_key_provider_result_t provider_generate(void *context, uint32_t ke
     esp_device_identity_provider_t *provider = context;
     identity_key_record_t existing;
     device_key_provider_result_t existing_result = load_record(provider, &existing);
+    clear_sensitive(&existing, sizeof(existing));
     if (existing_result == DEVICE_KEY_PROVIDER_OK) return DEVICE_KEY_PROVIDER_INVALID;
     if (existing_result == DEVICE_KEY_PROVIDER_CORRUPT || existing_result != DEVICE_KEY_PROVIDER_NOT_FOUND || key_version == 0U) {
         return existing_result == DEVICE_KEY_PROVIDER_CORRUPT ? existing_result : DEVICE_KEY_PROVIDER_IO_ERROR;
@@ -97,13 +112,18 @@ static device_key_provider_result_t provider_generate(void *context, uint32_t ke
     mbedtls_pk_free(&key);
     mbedtls_ctr_drbg_free(&drbg);
     mbedtls_entropy_free(&entropy);
-    if (result != 0) return DEVICE_KEY_PROVIDER_IO_ERROR;
+    if (result != 0) {
+        clear_sensitive(&record, sizeof(record));
+        return DEVICE_KEY_PROVIDER_IO_ERROR;
+    }
 
     nvs_handle_t handle = 0;
     esp_err_t err = nvs_open(provider->nvs_namespace, NVS_READWRITE, &handle);
     if (err == ESP_OK) err = nvs_set_blob(handle, IDENTITY_KEY_NAME, &record, sizeof(record));
+    if (err == ESP_OK) err = nvs_set_u8(handle, IDENTITY_INITIALIZED_NAME, 1U);
     if (err == ESP_OK) err = nvs_commit(handle);
     if (handle != 0) nvs_close(handle);
+    clear_sensitive(&record, sizeof(record));
     return err == ESP_OK ? DEVICE_KEY_PROVIDER_OK : DEVICE_KEY_PROVIDER_IO_ERROR;
 }
 
@@ -114,17 +134,26 @@ static device_key_provider_result_t provider_load(
     esp_device_identity_provider_t *provider = context;
     identity_key_record_t record;
     device_key_provider_result_t result = load_record(provider, &record);
-    if (result != DEVICE_KEY_PROVIDER_OK) return result;
+    if (result != DEVICE_KEY_PROVIDER_OK) {
+        clear_sensitive(&record, sizeof(record));
+        return result;
+    }
     mbedtls_pk_context key;
     result = parse_record(&record, &key);
+    uint32_t record_version = record.version;
+    clear_sensitive(&record, sizeof(record));
     if (result != DEVICE_KEY_PROVIDER_OK) return result;
     unsigned char encoded[160];
     int written = mbedtls_pk_write_pubkey_der(&key, encoded, sizeof(encoded));
     mbedtls_pk_free(&key);
-    if (written <= 0 || (size_t)written > public_key_capacity) return DEVICE_KEY_PROVIDER_CORRUPT;
+    if (written <= 0 || (size_t)written > public_key_capacity) {
+        clear_sensitive(encoded, sizeof(encoded));
+        return DEVICE_KEY_PROVIDER_CORRUPT;
+    }
     memcpy(public_key, encoded + sizeof(encoded) - (size_t)written, (size_t)written);
     *public_key_length = (size_t)written;
-    *key_version = record.version;
+    *key_version = record_version;
+    clear_sensitive(encoded, sizeof(encoded));
     return DEVICE_KEY_PROVIDER_OK;
 }
 
@@ -135,9 +164,13 @@ static device_key_provider_result_t provider_sign(
     esp_device_identity_provider_t *provider = context;
     identity_key_record_t record;
     device_key_provider_result_t result = load_record(provider, &record);
-    if (result != DEVICE_KEY_PROVIDER_OK) return result;
+    if (result != DEVICE_KEY_PROVIDER_OK) {
+        clear_sensitive(&record, sizeof(record));
+        return result;
+    }
     mbedtls_pk_context key;
     result = parse_record(&record, &key);
+    clear_sensitive(&record, sizeof(record));
     if (result != DEVICE_KEY_PROVIDER_OK) return result;
     unsigned char hash[32];
     mbedtls_sha256(message, message_length, hash, 0);
@@ -145,6 +178,7 @@ static device_key_provider_result_t provider_sign(
     mbedtls_ctr_drbg_context drbg;
     if (setup_rng(&entropy, &drbg) != ESP_OK) {
         mbedtls_pk_free(&key);
+        clear_sensitive(hash, sizeof(hash));
         return DEVICE_KEY_PROVIDER_IO_ERROR;
     }
     int signed_result = mbedtls_pk_sign(&key, MBEDTLS_MD_SHA256, hash, sizeof(hash), signature,
@@ -152,6 +186,7 @@ static device_key_provider_result_t provider_sign(
     mbedtls_ctr_drbg_free(&drbg);
     mbedtls_entropy_free(&entropy);
     mbedtls_pk_free(&key);
+    clear_sensitive(hash, sizeof(hash));
     return signed_result == 0 ? DEVICE_KEY_PROVIDER_OK : DEVICE_KEY_PROVIDER_IO_ERROR;
 }
 
@@ -194,7 +229,7 @@ bool esp_device_identity_provider_init(esp_device_identity_provider_t *provider,
 }
 
 device_key_provider_t esp_device_identity_provider_as_provider(esp_device_identity_provider_t *provider) {
-#if CONFIG_PULSELINK_DEVICE_IDENTITY_NVS_PROVIDER && CONFIG_NVS_ENCRYPTION
+#if CONFIG_PULSELINK_DEVICE_IDENTITY_NVS_PROVIDER
     return (device_key_provider_t){ .context = provider, .load_public_key = provider_load, .generate_key = provider_generate, .sign_der = provider_sign, .revoke = provider_revoke };
 #else
     return (device_key_provider_t){ .context = provider, .load_public_key = stub_load, .generate_key = stub_generate, .sign_der = stub_sign, .revoke = stub_revoke };

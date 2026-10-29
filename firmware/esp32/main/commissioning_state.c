@@ -34,6 +34,15 @@ bool commissioning_begin(
     return true;
 }
 
+bool commissioning_begin_backend_recovery(commissioning_context_t *context, uint32_t now_ms) {
+    if (context == NULL || context->state != COMMISSIONING_IDLE) return false;
+    context->state = COMMISSIONING_CREDENTIAL_PERSISTING;
+    context->started_at_ms = now_ms;
+    context->deadline_at_ms = now_ms + 24U * 60U * 60U * 1000U;
+    context->session_consumed = true;
+    return true;
+}
+
 bool commissioning_expire_if_needed(commissioning_context_t *context, uint32_t now_ms) {
     if (context == NULL || terminal(context->state)) return false;
     if (!elapsed(now_ms, context->started_at_ms, (uint32_t)(context->deadline_at_ms - context->started_at_ms))) {

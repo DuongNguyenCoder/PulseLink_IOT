@@ -6,6 +6,7 @@ import {
   randomUUID,
   sign,
 } from "node:crypto";
+import type { KeyObject } from "node:crypto";
 import { exportPKCS8 } from "jose";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { PrismaClient } from "../generated/prisma/client.js";
@@ -44,9 +45,15 @@ import {
 import { revokeRefreshSession } from "../modules/auth/session.service.js";
 import {
   canonicalDeviceEnrollmentPayload,
+  canonicalDeviceClaimPayload,
   canonicalProvisioningPayload,
   hashDeviceToken,
+  type DeviceClaimProof,
 } from "../modules/provisioning/provisioning-crypto.js";
+import {
+  completeDeviceClaim,
+  createDeviceClaimSession,
+} from "../modules/provisioning/device-claim.service.js";
 import { hashRefreshToken } from "../modules/auth/session-tokens.js";
 import {
   createProvisioningSession,
@@ -72,6 +79,7 @@ const installationIds = new Set<string>();
 const storeIds = new Set<string>();
 const deviceIds = new Set<string>();
 const provisioningSessionIds = new Set<string>();
+const deviceClaimSessionIds = new Set<string>();
 const eventIds = new Set<string>();
 const staffIds = new Set<string>();
 const pushTokenIds = new Set<string>();
@@ -130,12 +138,46 @@ async function createStore(): Promise<string> {
   return store.id;
 }
 
+async function createOwnerStore(): Promise<{ accountId: string; storeId: string }> {
+  const accountId = await createAccount();
+  const storeId = await createStore();
+  await prisma.storeMembership.create({
+    data: { accountId, storeId, role: "OWNER", status: "ACTIVE" },
+  });
+  return { accountId, storeId };
+}
+
+function signClaimProof(input: {
+  deviceId: string;
+  storeId: string;
+  sessionId: string;
+  challenge: string;
+  expiresAt: number;
+  publicKeySpkiBase64: string;
+  privateKey: KeyObject;
+}): DeviceClaimProof {
+  const proofBody = {
+    publicKeySpkiBase64: input.publicKeySpkiBase64,
+    keyVersion: 1,
+    challenge: input.challenge,
+    expiresAt: input.expiresAt,
+  };
+  const signatureDerBase64 = sign("sha256", canonicalDeviceClaimPayload({
+    deviceId: input.deviceId,
+    storeId: input.storeId,
+    claimSessionId: input.sessionId,
+    proof: proofBody,
+  }), { key: input.privateKey, dsaEncoding: "der" }).toString("base64");
+  return { ...proofBody, signatureDerBase64 };
+}
+
 async function cleanupCreatedRows(): Promise<void> {
   const accounts = [...accountIds];
   const installations = [...installationIds];
   const stores = [...storeIds];
   const devices = [...deviceIds];
   const provisioningSessions = [...provisioningSessionIds];
+  const deviceClaimSessions = [...deviceClaimSessionIds];
   const events = [...eventIds];
   const staff = [...staffIds];
   const pushTokens = [...pushTokenIds];
@@ -162,6 +204,11 @@ async function cleanupCreatedRows(): Promise<void> {
   if (provisioningSessions.length > 0) {
     await prisma.provisioningSession.deleteMany({
       where: { id: { in: provisioningSessions } },
+    });
+  }
+  if (deviceClaimSessions.length > 0) {
+    await prisma.deviceClaimSession.deleteMany({
+      where: { id: { in: deviceClaimSessions } },
     });
   }
   if (devices.length > 0) {
@@ -201,6 +248,7 @@ async function cleanupCreatedRows(): Promise<void> {
   storeIds.clear();
   deviceIds.clear();
   provisioningSessionIds.clear();
+  deviceClaimSessionIds.clear();
   eventIds.clear();
   staffIds.clear();
   pushTokenIds.clear();
@@ -218,6 +266,66 @@ integrationDescribe("PostgreSQL schema and session integration", () => {
 
   afterAll(async () => {
     await prisma.$disconnect();
+  });
+
+  it("claims an Owner-scoped Device atomically and permits same-Store retry only", async () => {
+    const now = new Date();
+    const ownerA = await createOwnerStore();
+    const ownerB = await createOwnerStore();
+    const deviceId = `pl-${randomUUID().replaceAll("-", "")}`;
+    const key = generateKeyPairSync("ec", { namedCurve: "prime256v1" });
+    const publicKeySpkiBase64 = key.publicKey.export({ type: "spki", format: "der" }).toString("base64");
+    const claimA = await createDeviceClaimSession(
+      prisma as never, ownerA.accountId, ownerA.storeId, deviceId, "Integration device", now,
+    );
+    if (!("alreadyClaimed" in claimA)) deviceClaimSessionIds.add(claimA.session.id);
+    const claimB = await createDeviceClaimSession(
+      prisma as never, ownerB.accountId, ownerB.storeId, deviceId, "Integration device", now,
+    );
+    if (!("alreadyClaimed" in claimB)) deviceClaimSessionIds.add(claimB.session.id);
+    if ("alreadyClaimed" in claimA || "alreadyClaimed" in claimB) throw new Error("Unexpected prior claim");
+
+    const proofA = signClaimProof({
+      deviceId, storeId: ownerA.storeId, sessionId: claimA.session.id, challenge: claimA.challenge,
+      expiresAt: Math.floor(claimA.session.expiresAt.getTime() / 1000),
+      publicKeySpkiBase64, privateKey: key.privateKey,
+    });
+    const proofB = signClaimProof({
+      deviceId, storeId: ownerB.storeId, sessionId: claimB.session.id, challenge: claimB.challenge,
+      expiresAt: Math.floor(claimB.session.expiresAt.getTime() / 1000),
+      publicKeySpkiBase64, privateKey: key.privateKey,
+    });
+    const outcomes = await Promise.allSettled([
+      completeDeviceClaim(prisma as never, ownerA.accountId, ownerA.storeId,
+        claimA.session.id, claimA.challenge, proofA, undefined, now),
+      completeDeviceClaim(prisma as never, ownerB.accountId, ownerB.storeId,
+        claimB.session.id, claimB.challenge, proofB, undefined, now),
+    ]);
+    const winners = outcomes.filter((outcome) => outcome.status === "fulfilled");
+    expect(winners).toHaveLength(1);
+    deviceIds.add(deviceId);
+    const stored = await prisma.device.findUnique({ where: { id: deviceId } });
+    expect([ownerA.storeId, ownerB.storeId]).toContain(stored?.storeId);
+    expect(outcomes[0]?.status === "fulfilled").toBe(stored?.storeId === ownerA.storeId);
+    expect(stored?.enrollmentPublicKey).toBe(publicKeySpkiBase64);
+
+    const winningOwner = stored?.storeId === ownerA.storeId ? ownerA : ownerB;
+    const repeated = await createDeviceClaimSession(
+      prisma as never, winningOwner.accountId, winningOwner.storeId, deviceId, "Renamed", now,
+    );
+    expect(repeated).toMatchObject({ alreadyClaimed: true, device: { id: deviceId, storeId: winningOwner.storeId } });
+    const losingOwner = stored?.storeId === ownerA.storeId ? ownerB : ownerA;
+    await expect(createDeviceClaimSession(
+      prisma as never, losingOwner.accountId, losingOwner.storeId, deviceId, "Foreign claim", now,
+    )).rejects.toMatchObject({ statusCode: 409 });
+  });
+
+  it("rejects an account without active Owner membership before creating a claim", async () => {
+    const accountId = await createAccount();
+    const storeId = await createStore();
+    await expect(createDeviceClaimSession(
+      prisma as never, accountId, storeId, `pl-${randomUUID().replaceAll("-", "")}`, "Denied", new Date(),
+    )).rejects.toMatchObject({ statusCode: 404 });
   });
 
   it("accepts a matching Session account and rejects an installation/account mismatch", async () => {

@@ -7,6 +7,11 @@ commissioning_event_gate_result_t commissioning_event_gate_load_token(
     size_t capacity,
     size_t *length
 ) {
+    if (length != NULL) *length = 0U;
+    if (token != NULL) {
+        volatile uint8_t *bytes = token;
+        for (size_t index = 0U; index < capacity; index++) bytes[index] = 0U;
+    }
     if (lifecycle == NULL || commissioning_state(lifecycle) != COMMISSIONING_ONLINE) {
         return COMMISSIONING_EVENT_GATE_NOT_ONLINE;
     }

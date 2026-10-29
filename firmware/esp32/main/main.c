@@ -13,7 +13,9 @@
 #include "physical_confirmation.h"
 #include "commissioning_state.h"
 #include "device_identity.h"
+#include "device_provisioning_payload.h"
 #include "esp_device_identity_provider.h"
+#include "esp_device_credential_storage.h"
 #include "driver/gpio.h"
 #include "esp_crt_bundle.h"
 #include "esp_event.h"
@@ -35,6 +37,7 @@
 static const char *TAG = "pulselink";
 static const int WIFI_CONNECTED_BIT = BIT0;
 static const int WIFI_RECONNECT_BIT = BIT1;
+static const int WIFI_CONFIGURED_BIT = BIT2;
 static EventGroupHandle_t s_wifi_events;
 static SemaphoreHandle_t s_queue_mutex;
 static TaskHandle_t s_sender_task;
@@ -75,10 +78,13 @@ static commissioning_wifi_controller_t s_commissioning_wifi;
 static device_identity_t s_device_identity;
 static esp_device_identity_provider_t s_identity_provider;
 static commissioning_credential_storage_t s_credential_storage;
+static esp_device_credential_storage_t s_operational_credential_provider;
 static commissioning_backend_reachability_t s_backend_reachability;
 static SemaphoreHandle_t s_commissioning_mutex;
 static bool s_redemption_pending;
 static bool s_redemption_started;
+static bool s_operational_credential_present;
+static bool s_backend_recovery_requested;
 static char s_pending_ssid[33];
 static char s_pending_password[65];
 static char s_pending_device_id[128];
@@ -102,7 +108,13 @@ static bool commissioning_wifi_configure_station(void *context, const char *ssid
     config.sta.scan_method = WIFI_FAST_SCAN;
     config.sta.sort_method = WIFI_CONNECT_AP_BY_SIGNAL;
     config.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
-    return esp_wifi_set_mode(WIFI_MODE_STA) == ESP_OK && esp_wifi_set_config(WIFI_IF_STA, &config) == ESP_OK;
+    bool configured = esp_wifi_set_mode(WIFI_MODE_STA) == ESP_OK &&
+        esp_wifi_set_config(WIFI_IF_STA, &config) == ESP_OK;
+    clear_sensitive(&config, sizeof(config));
+    if (configured && s_wifi_events != NULL) {
+        xEventGroupSetBits(s_wifi_events, WIFI_CONFIGURED_BIT | WIFI_RECONNECT_BIT);
+    }
+    return configured;
 }
 
 static bool commissioning_wifi_connect(void *context) {
@@ -123,6 +135,33 @@ static void commissioning_wifi_controller_task(void *arg) {
             (uint32_t)pdTICKS_TO_MS(xTaskGetTickCount()));
         vTaskDelay(pdMS_TO_TICKS(100));
     }
+}
+
+static void commissioning_backend_recovery_task(void *arg) {
+    (void)arg;
+    uint8_t base_mac[6] = { 0 };
+    char device_id[16] = { 0 };
+    esp_read_mac(base_mac, ESP_MAC_WIFI_STA);
+    if (!device_provisioning_build_device_id(base_mac, device_id, sizeof(device_id))) {
+        (void)commissioning_wifi_controller_fail(&s_commissioning_wifi,
+            commissioning_wifi_controller_generation(&s_commissioning_wifi));
+        vTaskDelete(NULL);
+        return;
+    }
+    clear_sensitive(base_mac, sizeof(base_mac));
+    while (commissioning_state(&s_commissioning) == COMMISSIONING_CREDENTIAL_PERSISTING &&
+           commissioning_wifi_controller_is_active(&s_commissioning_wifi)) {
+        if ((xEventGroupGetBits(s_wifi_events) & WIFI_CONNECTED_BIT) != 0 &&
+            !commissioning_backend_reachability_is_pending(&s_backend_reachability)) {
+            if (!commissioning_backend_reachability_start_https(&s_backend_reachability,
+                    CONFIG_PULSELINK_REDEMPTION_BASE_URL, device_id, NULL, 8000U)) {
+                ESP_LOGW(TAG, "backend recovery probe unavailable; retrying later");
+            }
+        }
+        vTaskDelay(pdMS_TO_TICKS(30000));
+    }
+    clear_sensitive(device_id, sizeof(device_id));
+    vTaskDelete(NULL);
 }
 
 static void clear_commissioning_pending_locked(void) {
@@ -342,6 +381,7 @@ static int queue_find_pending_locked(void) {
     return -1;
 }
 
+#if CONFIG_PULSELINK_BUTTON_GPIO >= 0
 static bool create_event_id(char output[EVENT_ID_LENGTH]) {
     uint8_t bytes[16];
     esp_fill_random(bytes, sizeof(bytes));
@@ -402,6 +442,7 @@ static bool enqueue_button_event(void) {
     if (s_sender_task != NULL) xTaskNotifyGive(s_sender_task);
     return true;
 }
+#endif
 
 static esp_err_t response_handler(esp_http_client_event_t *event) {
     if (event == NULL || event->user_data == NULL || event->event_id != HTTP_EVENT_ON_DATA || event->data == NULL) return ESP_OK;
@@ -477,7 +518,11 @@ static bool build_event_body(const queued_event_t *event, char **body) {
 
 static esp_err_t send_event(const queued_event_t *event, int *status_code) {
     char redeemed_token[256] = { 0 };
+#if CONFIG_PULSELINK_COMMISSIONING_ENABLED
+    const char *device_token = NULL;
+#else
     const char *device_token = CONFIG_PULSELINK_DEVICE_TOKEN;
+#endif
 #if CONFIG_PULSELINK_COMMISSIONING_ENABLED
     size_t redeemed_length = 0U;
     if (commissioning_event_gate_load_token(&s_commissioning, &s_credential_storage,
@@ -521,16 +566,18 @@ static esp_err_t send_event(const queued_event_t *event, int *status_code) {
         clear_sensitive(redeemed_token, sizeof(redeemed_token));
         return ESP_ERR_NO_MEM;
     }
-    char authorization[256];
+    char authorization[320] = { 0 };
     int auth_length = snprintf(authorization, sizeof(authorization), "Bearer %s", device_token);
     esp_err_t err = ESP_ERR_INVALID_SIZE;
     if (auth_length > 0 && (size_t)auth_length < sizeof(authorization)) {
         esp_http_client_set_header(client, "Authorization", authorization);
+        clear_sensitive(authorization, sizeof(authorization));
         esp_http_client_set_header(client, "Content-Type", "application/json");
         esp_http_client_set_post_field(client, body, (int)strlen(body));
         err = esp_http_client_perform(client);
         *status_code = esp_http_client_get_status_code(client);
     }
+    clear_sensitive(authorization, sizeof(authorization));
     esp_http_client_cleanup(client);
     cJSON_free(body);
     clear_sensitive(redeemed_token, sizeof(redeemed_token));
@@ -612,6 +659,7 @@ static void event_sender_task(void *arg) {
     }
 }
 
+#if CONFIG_PULSELINK_BUTTON_GPIO >= 0
 static void button_task(void *arg) {
     (void)arg;
     bool last_raw = gpio_get_level(CONFIG_PULSELINK_BUTTON_GPIO) == 0;
@@ -635,6 +683,7 @@ static void button_task(void *arg) {
         vTaskDelay(pdMS_TO_TICKS(10));
     }
 }
+#endif
 
 static void wifi_log_rssi(void) {
     wifi_ap_record_t ap_info;
@@ -689,6 +738,7 @@ static void wifi_reconnect_task(void *arg) {
     uint32_t backoff_ms = 1000U;
     while (true) {
         xEventGroupWaitBits(s_wifi_events, WIFI_RECONNECT_BIT, pdTRUE, pdFALSE, portMAX_DELAY);
+        if ((xEventGroupGetBits(s_wifi_events) & WIFI_CONFIGURED_BIT) == 0) continue;
         if ((xEventGroupGetBits(s_wifi_events) & WIFI_CONNECTED_BIT) != 0) continue;
         vTaskDelay(pdMS_TO_TICKS(backoff_ms));
         esp_err_t err = esp_wifi_connect();
@@ -727,7 +777,32 @@ static esp_err_t wifi_start(void) {
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     if (configured) ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
     ESP_ERROR_CHECK(esp_wifi_start());
-    if (configured) xTaskCreate(wifi_reconnect_task, "wifi_reconnect", 4096, NULL, 5, NULL);
+    bool station_configured = configured;
+#if CONFIG_PULSELINK_COMMISSIONING_ENABLED
+    if (!station_configured && esp_wifi_get_config(WIFI_IF_STA, &wifi_config) == ESP_OK &&
+        wifi_config.sta.ssid[0] != '\0') station_configured = true;
+#endif
+    clear_sensitive(&wifi_config, sizeof(wifi_config));
+    if (station_configured) {
+        xEventGroupSetBits(s_wifi_events, WIFI_CONFIGURED_BIT | WIFI_RECONNECT_BIT);
+    }
+#if CONFIG_PULSELINK_COMMISSIONING_ENABLED
+    if (station_configured && s_operational_credential_present) {
+        uint32_t now_ms = (uint32_t)pdTICKS_TO_MS(xTaskGetTickCount());
+        if (!commissioning_begin_backend_recovery(&s_commissioning, now_ms) ||
+            !commissioning_wifi_controller_start_backend_recovery(&s_commissioning_wifi, now_ms)) {
+            ESP_LOGE(TAG, "commissioning recovery could not be started");
+            return ESP_ERR_INVALID_STATE;
+        }
+        s_backend_recovery_requested = true;
+    }
+    if (xTaskCreate(wifi_reconnect_task, "wifi_reconnect", 4096, NULL, 5, NULL) != pdPASS) {
+        ESP_LOGE(TAG, "Wi-Fi reconnect task could not be started");
+        return ESP_ERR_NO_MEM;
+    }
+#else
+    if (station_configured) xTaskCreate(wifi_reconnect_task, "wifi_reconnect", 4096, NULL, 5, NULL);
+#endif
     xTaskCreate(event_sender_task, "event_sender", 8192, NULL, 4, &s_sender_task);
 #if CONFIG_PULSELINK_COMMISSIONING_ENABLED
     xTaskCreate(commissioning_wifi_controller_task, "commissioning_wifi", 4096, NULL, 5, NULL);
@@ -753,15 +828,25 @@ void app_main(void) {
 #if CONFIG_PULSELINK_COMMISSIONING_ENABLED
     if (CONFIG_PULSELINK_COMMISSIONING_BUTTON_GPIO < 0) {
         ESP_LOGE(TAG, "commissioning disabled at runtime: button GPIO is unconfigured");
+    } else if (!esp_device_credential_storage_init(&s_operational_credential_provider,
+                   "opcred", &s_credential_storage) ||
+               !commissioning_credential_storage_is_ready(&s_credential_storage)) {
+        ESP_LOGE(TAG, "commissioning disabled at runtime: operational credential storage unavailable");
     } else if (!esp_device_identity_provider_init(&s_identity_provider, "identity") ||
                !esp_device_identity_provider_is_available()) {
-        ESP_LOGE(TAG, "commissioning disabled at runtime: protected identity provider unavailable");
+        ESP_LOGE(TAG, "commissioning disabled at runtime: device identity provider unavailable");
     } else {
         device_identity_init(&s_device_identity, esp_device_identity_provider_as_provider(&s_identity_provider));
-        if (device_identity_load_or_generate(&s_device_identity, false, 1U) != DEVICE_KEY_PROVIDER_OK) {
-            ESP_LOGE(TAG, "commissioning disabled at runtime: enrolled identity unavailable");
+        if (device_identity_load_or_generate(&s_device_identity, true, 1U) != DEVICE_KEY_PROVIDER_OK) {
+            ESP_LOGE(TAG, "commissioning disabled at runtime: device identity unavailable or invalid");
         } else {
             commissioning_init(&s_commissioning);
+            uint8_t stored_credential[256] = { 0 };
+            size_t stored_credential_length = 0U;
+            s_operational_credential_present = commissioning_credential_storage_load(
+                &s_credential_storage, stored_credential, sizeof(stored_credential),
+                &stored_credential_length) == COMMISSIONING_STORAGE_OK && stored_credential_length > 0U;
+            clear_sensitive(stored_credential, sizeof(stored_credential));
             s_commissioning_mutex = xSemaphoreCreateMutex();
             commissioning_wifi_ops_t wifi_ops = {
                 .configure_station = commissioning_wifi_configure_station,
@@ -814,7 +899,13 @@ void app_main(void) {
         ESP_LOGW(TAG, "Wi-Fi is not started; queued events remain in NVS");
     }
 #if CONFIG_PULSELINK_COMMISSIONING_ENABLED
-    else if (commissioning_ready &&
+    else if (commissioning_ready && s_backend_recovery_requested) {
+        if (xTaskCreate(commissioning_backend_recovery_task, "commissioning_recovery", 4096, NULL, 5, NULL) != pdPASS) {
+            (void)commissioning_wifi_controller_fail(&s_commissioning_wifi,
+                commissioning_wifi_controller_generation(&s_commissioning_wifi));
+            ESP_LOGE(TAG, "backend recovery task could not be started");
+        }
+    } else if (commissioning_ready &&
              xTaskCreate(commissioning_gate_task, "commissioning_gate", 6144, NULL, 5, NULL) != pdPASS) {
         ESP_LOGE(TAG, "commissioning gate task could not be started");
     }

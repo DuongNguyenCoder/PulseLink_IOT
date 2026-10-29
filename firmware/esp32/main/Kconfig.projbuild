@@ -79,20 +79,23 @@ config PULSELINK_COMMISSIONING_BUTTON_GPIO
         active level are measured on the actual carrier board.
 
 config PULSELINK_DEVICE_IDENTITY_NVS_PROVIDER
-    bool "Enable encrypted-NVS device identity provider"
+    bool "Enable NVS device identity provider (private key is extractable without flash protection)"
     default n
-    depends on NVS_ENCRYPTION
     help
-        This provider requires encrypted NVS initialization and a reviewed
-        ESP32 security configuration. Keep disabled until factory key
-        provisioning and recovery semantics are approved.
+        Generates a unique P-256 identity on first boot and stores its key in
+        the identity NVS namespace. This is an MVP proof-of-possession identity,
+        not genuine-hardware attestation: raw flash access can clone the key
+        unless a separately approved flash protection policy is enabled. Keep
+        disabled by default. Corrupt or unreadable existing records fail closed.
 
 config PULSELINK_OPERATIONAL_CREDENTIAL_STORAGE
-    bool "Enable protected operational credential storage adapter"
+    bool "Enable operational credential persistence in NVS (not protected at rest by default)"
     default n
-    depends on NVS_ENCRYPTION
     help
-        Keep disabled until a reviewed encrypted-NVS implementation and
-        hardware provisioning/recovery procedure exist.
+        Enables per-device operational token persistence and read-back through
+        the NVS storage provider. Without NVS_ENCRYPTION, the token is stored
+        in ordinary NVS and is extractable from raw flash. This option does not
+        enable NVS encryption or claim protection at rest. Keep disabled unless
+        the deployment accepts that MVP limitation.
 
 endmenu

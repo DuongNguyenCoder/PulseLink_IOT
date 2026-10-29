@@ -2,6 +2,7 @@
 param(
     [switch]$ProbeBackend,
     [switch]$CheckTestDatabase,
+    [string]$ApprovedPublicDevelopmentHost,
     [string]$OutputDirectory = (Join-Path ([System.IO.Path]::GetTempPath()) 'pulselink-commissioning-preflight')
 )
 
@@ -72,28 +73,37 @@ function Get-SdkConfigValue {
 
 function Invoke-ReadOnlyHttpsProbe {
     param([uri]$BaseUri)
-    $healthUri = [uri]::new($BaseUri, '/health/live')
-    try {
-        $response = Invoke-WebRequest -Uri $healthUri -Method Get -TimeoutSec 8 -MaximumRedirection 0
-        $body = $response.Content | ConvertFrom-Json
-        if ($response.StatusCode -eq 200 -and $body.status -eq 'ok' -and $body.service -eq 'pulselink-api') {
-            return @{ ok = $true; detail = 'HTTPS hostname/certificate validation succeeded; /health/live identified pulselink-api.' }
+    $results = @{}
+    foreach ($route in @('live','ready')) {
+        try {
+            $healthUri = [uri]::new($BaseUri, "/health/$route")
+            $response = Invoke-WebRequest -Uri $healthUri -Method Get -TimeoutSec 20 -MaximumRedirection 0
+            $body = $response.Content | ConvertFrom-Json
+            $valid = $response.StatusCode -eq 200 -and $body.status -eq 'ok' -and $body.service -eq 'pulselink-api'
+            if ($route -eq 'ready') { $valid = $valid -and $body.dependencies.database -eq 'ok' }
+            if ($valid) {
+                $results[$route] = @{ ok = $true; detail = "HTTPS certificate/hostname validation and /health/$route contract succeeded." }
+            } else {
+                $results[$route] = @{ ok = $false; detail = "HTTPS answered but /health/$route did not satisfy its response contract." }
+            }
+        } catch {
+            $reason = $_.Exception.GetType().Name
+            $results[$route] = @{ ok = $false; detail = "HTTPS /health/$route probe failed ($reason); response text and URL were omitted." }
         }
-        return @{ ok = $false; detail = 'HTTPS responded, but the liveness contract did not match.' }
-    } catch {
-        $reason = $_.Exception.GetType().Name
-        return @{ ok = $false; detail = "HTTPS probe failed ($reason); response text and URL were omitted." }
     }
+    return $results
 }
 
 function Test-DevelopmentHost {
-    param([string]$HostName)
+    param([string]$HostName, [string]$ApprovedPublicHost)
+    if (-not [string]::IsNullOrWhiteSpace($ApprovedPublicHost) -and $HostName.Equals($ApprovedPublicHost,[StringComparison]::OrdinalIgnoreCase)) { return $true }
     if ($HostName -in @('localhost','127.0.0.1','::1') -or $HostName.EndsWith('.test',[StringComparison]::OrdinalIgnoreCase) -or $HostName.EndsWith('.local',[StringComparison]::OrdinalIgnoreCase)) { return $true }
     $address = $null
     if (-not [Net.IPAddress]::TryParse($HostName, [ref]$address)) { return $false }
     $bytes = $address.GetAddressBytes()
     if ($bytes.Length -eq 4) {
-        return ($bytes[0] -eq 10) -or ($bytes[0] -eq 172 -and $bytes[1] -ge 16 -and $bytes[1] -le 31) -or ($bytes[0] -eq 192 -and $bytes[1] -eq 168) -or ($bytes[0] -eq 127)
+        $isPrivate = ($bytes[0] -eq 10) -or ($bytes[0] -eq 172 -and $bytes[1] -ge 16 -and $bytes[1] -le 31) -or ($bytes[0] -eq 192 -and $bytes[1] -eq 168) -or ($bytes[0] -eq 127)
+        return $isPrivate
     }
     return $address.IsIPv6LinkLocal -or $address.IsIPv6SiteLocal -or (($bytes[0] -band 0xFE) -eq 0xFC) -or [Net.IPAddress]::IsLoopback($address)
 }
@@ -215,12 +225,15 @@ if (-not $ProbeBackend) {
 } else {
     $parsedApi = $null
     $isValidUri = [uri]::TryCreate($apiBase, [UriKind]::Absolute, [ref]$parsedApi)
-    if (-not $isValidUri -or $parsedApi.Scheme -ne 'https' -or $parsedApi.UserInfo -or $parsedApi.Query -or $parsedApi.Fragment -or $parsedApi.AbsolutePath -ne '/' -or -not (Test-DevelopmentHost $parsedApi.Host)) {
+    if (-not $isValidUri -or $parsedApi.Scheme -ne 'https' -or $parsedApi.UserInfo -or $parsedApi.Query -or $parsedApi.Fragment -or $parsedApi.AbsolutePath -ne '/' -or -not (Test-DevelopmentHost $parsedApi.Host $ApprovedPublicDevelopmentHost)) {
         Add-Check 'backend:development-https' 'FAIL' 'Configured API origin is not a clean HTTPS origin; it was not requested.' 'Use an HTTPS origin only; never put tokens or credentials in the URL.'
     } else {
         $probe = Invoke-ReadOnlyHttpsProbe -BaseUri $parsedApi
-        if ($probe.ok) { Add-Check 'backend:development-https' 'PASS' $probe.detail }
-        else { Add-Check 'backend:development-https' 'FAIL' $probe.detail 'Check the development service, trusted CA/hostname, and network route.' }
+        foreach ($route in @('live','ready')) {
+            $result = $probe[$route]
+            if ($result.ok) { Add-Check "backend:https-$route" 'PASS' $result.detail }
+            else { Add-Check "backend:https-$route" 'FAIL' $result.detail 'Check the confirmed development service, trusted CA/hostname, and network route.' }
+        }
     }
 }
 

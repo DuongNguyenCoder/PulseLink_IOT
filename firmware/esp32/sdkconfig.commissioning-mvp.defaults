@@ -1,0 +1,9 @@
+# Compile profile for Owner-to-device MVP commissioning. This deliberately
+# uses ordinary NVS: operational tokens and identity keys are extractable from
+# raw flash. It does not enable NVS Encryption, Flash Encryption or Secure Boot.
+# Do not flash until the target board, button wiring and recovery procedure
+# have been verified by the operator.
+CONFIG_PULSELINK_COMMISSIONING_ENABLED=y
+CONFIG_PULSELINK_DEVICE_IDENTITY_NVS_PROVIDER=y
+CONFIG_PULSELINK_OPERATIONAL_CREDENTIAL_STORAGE=y
+CONFIG_NVS_ENCRYPTION=n

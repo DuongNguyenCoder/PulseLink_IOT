@@ -6,8 +6,10 @@
 #include "cJSON.h"
 #include "commissioning_crypto.h"
 #include "commissioning_protocol.h"
+#include "device_provisioning_payload.h"
 #include "esp_http_server.h"
 #include "esp_log.h"
+#include "esp_mac.h"
 #include "esp_netif.h"
 #include "esp_random.h"
 #include "esp_wifi.h"
@@ -20,6 +22,70 @@
 #define SESSION_ID_LIMIT 128U
 #define CHALLENGE_LIMIT 256U
 #define DEVICE_ID_LIMIT 128U
+
+static void clear_bytes(void *value, size_t length);
+static bool request_body(httpd_req_t *request, char *body, size_t capacity);
+static bool json_string(cJSON *root, const char *name, char *output, size_t capacity);
+static bool json_expiry(cJSON *root, uint32_t *output);
+static bool response_json(httpd_req_t *request, cJSON *root, const char *type);
+static bool response_error(httpd_req_t *request, int status, const char *message);
+static bool b64_string(const uint8_t *value, size_t length, char *output, size_t capacity);
+
+static esp_err_t enrollment_proof_handler(httpd_req_t *request) {
+    commissioning_transport_t *transport = request->user_ctx;
+    char body[REQUEST_LIMIT + 1U];
+    if (transport == NULL || !transport->running || transport->identity == NULL ||
+        commissioning_state(transport->lifecycle) != COMMISSIONING_SOFTAP_ACTIVE ||
+        device_identity_state(transport->identity) != DEVICE_IDENTITY_READY ||
+        !request_body(request, body, sizeof(body)))
+        return response_error(request, 409, "commissioning_window_required") ? ESP_OK : ESP_FAIL;
+    cJSON *root = cJSON_ParseWithLength(body, strlen(body));
+    if (root == NULL) return response_error(request, 400, "invalid_json") ? ESP_OK : ESP_FAIL;
+    char requested_id[DEVICE_ID_LIMIT], device_id[16], store_id[SESSION_ID_LIMIT];
+    char session_id[SESSION_ID_LIMIT], challenge[CHALLENGE_LIMIT];
+    uint32_t expires_at = 0U;
+    uint8_t mac[6], public_key[160], signature[128];
+    size_t public_key_length = 0U, signature_length = 0U;
+    char public_key_b64[256], signature_b64[192], payload[2048];
+    size_t payload_length = 0U;
+    time_t now = time(NULL);
+    bool valid = json_string(root, "deviceId", requested_id, sizeof(requested_id)) &&
+        json_string(root, "storeId", store_id, sizeof(store_id)) &&
+        json_string(root, "claimSessionId", session_id, sizeof(session_id)) &&
+        json_string(root, "challenge", challenge, sizeof(challenge)) &&
+        json_expiry(root, &expires_at) && expires_at > (uint32_t)now &&
+        expires_at <= (uint32_t)now + 300U &&
+        esp_read_mac(mac, ESP_MAC_WIFI_STA) == ESP_OK &&
+        device_provisioning_build_device_id(mac, device_id, sizeof(device_id)) &&
+        strcmp(requested_id, device_id) == 0 &&
+        device_identity_get_public_key(transport->identity, public_key, sizeof(public_key), &public_key_length) == DEVICE_KEY_PROVIDER_OK &&
+        b64_string(public_key, public_key_length, public_key_b64, sizeof(public_key_b64)) &&
+        device_provisioning_build_claim_payload(payload, sizeof(payload), device_id, store_id,
+            session_id, device_identity_key_version(transport->identity), public_key_b64,
+            challenge, expires_at, &payload_length) == DEVICE_PROVISIONING_PAYLOAD_OK &&
+        device_identity_sign_der(transport->identity, (const uint8_t *)payload, payload_length,
+            signature, sizeof(signature), &signature_length) == DEVICE_KEY_PROVIDER_OK &&
+        b64_string(signature, signature_length, signature_b64, sizeof(signature_b64));
+    cJSON_Delete(root);
+    clear_bytes(payload, sizeof(payload));
+    clear_bytes(signature, sizeof(signature));
+    clear_bytes(public_key, sizeof(public_key));
+    if (!valid) return response_error(request, 401, "device_claim_proof_unavailable") ? ESP_OK : ESP_FAIL;
+    cJSON *response = cJSON_CreateObject();
+    if (response == NULL) return response_error(request, 503, "response_unavailable") ? ESP_OK : ESP_FAIL;
+    cJSON_AddStringToObject(response, "deviceId", device_id);
+    cJSON_AddStringToObject(response, "storeId", store_id);
+    cJSON_AddStringToObject(response, "claimSessionId", session_id);
+    cJSON_AddStringToObject(response, "publicKeySpkiBase64", public_key_b64);
+    cJSON_AddNumberToObject(response, "keyVersion", device_identity_key_version(transport->identity));
+    cJSON_AddStringToObject(response, "challenge", challenge);
+    cJSON_AddNumberToObject(response, "expiresAt", expires_at);
+    cJSON_AddStringToObject(response, "signatureDerBase64", signature_b64);
+    bool sent = response_json(request, response, "application/json");
+    cJSON_Delete(response);
+    clear_bytes(signature_b64, sizeof(signature_b64));
+    return sent ? ESP_OK : ESP_FAIL;
+}
 
 static void clear_bytes(void *value, size_t length) {
     volatile uint8_t *bytes = value;
@@ -61,7 +127,8 @@ static bool json_string(cJSON *root, const char *name, char *output, size_t capa
 
 static bool json_expiry(cJSON *root, uint32_t *output) {
     cJSON *item = cJSON_GetObjectItemCaseSensitive(root, "expiresAt");
-    if (!cJSON_IsNumber(item) || item->valuedouble < 1.0 || item->valuedouble > 4294967295.0) return false;
+    if (!cJSON_IsNumber(item) || item->valuedouble < 1.0 || item->valuedouble > 4294967295.0 ||
+        item->valuedouble != (double)(uint32_t)item->valuedouble) return false;
     *output = (uint32_t)item->valuedouble;
     return true;
 }
@@ -269,15 +336,17 @@ static bool start_server(commissioning_transport_t *transport) {
     if (transport == NULL || transport->running || transport->lifecycle == NULL || transport->identity == NULL ||
         commissioning_state(transport->lifecycle) != COMMISSIONING_SOFTAP_ACTIVE || device_identity_state(transport->identity) != DEVICE_IDENTITY_READY) return false;
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-    config.max_uri_handlers = 2;
+    config.max_uri_handlers = 3;
     config.max_open_sockets = 1;
     config.max_req_hdr_len = 512;
-    config.max_uri_handlers = 2;
+    config.max_uri_handlers = 3;
     httpd_handle_t server = NULL;
     if (httpd_start(&server, &config) != ESP_OK) return false;
     httpd_uri_t handshake = { .uri = "/v1/commissioning/handshake", .method = HTTP_POST, .handler = handshake_handler, .user_ctx = transport };
     httpd_uri_t credentials = { .uri = "/v1/commissioning/credentials", .method = HTTP_POST, .handler = credentials_handler, .user_ctx = transport };
-    if (httpd_register_uri_handler(server, &handshake) != ESP_OK || httpd_register_uri_handler(server, &credentials) != ESP_OK) {
+    httpd_uri_t enrollment_proof = { .uri = "/v1/commissioning/enrollment-proof", .method = HTTP_POST, .handler = enrollment_proof_handler, .user_ctx = transport };
+    if (httpd_register_uri_handler(server, &handshake) != ESP_OK || httpd_register_uri_handler(server, &credentials) != ESP_OK ||
+        httpd_register_uri_handler(server, &enrollment_proof) != ESP_OK) {
         httpd_stop(server);
         return false;
     }

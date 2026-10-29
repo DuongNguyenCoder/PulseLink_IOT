@@ -5,6 +5,10 @@ import android.Manifest;
 import android.net.Network;
 import android.os.Build;
 import android.os.Bundle;
+import com.google.mlkit.vision.codescanner.GmsBarcodeScanner;
+import com.google.mlkit.vision.codescanner.GmsBarcodeScannerOptions;
+import com.google.mlkit.vision.codescanner.GmsBarcodeScanning;
+import com.google.mlkit.vision.barcode.common.Barcode;
 import android.text.InputType;
 import android.view.View;
 import android.widget.*;
@@ -28,6 +32,7 @@ public final class MainActivity extends Activity {
     private SoftApConnection softApConnection;
     private CommissioningTransportClient transportClient;
     private JSONObject provisioningData;
+    private String pendingDeviceClaimId;
     private volatile long commissioningRun;
 
     @Override public void onCreate(Bundle state) { super.onCreate(state); session = new SecureSession(this); setContentView(view()); restoreSession(); }
@@ -53,9 +58,12 @@ public final class MainActivity extends Activity {
         root.addView(button("Create Store", v -> createStore())); root.addView(button("Refresh Stores", v -> loadStores()));
         storeId = input("Selected Store ID"); root.addView(storeId);
         root.addView(label("Devices")); devices = label("No devices loaded"); root.addView(devices);
-        deviceName = input("New Device name"); root.addView(deviceName);
-        root.addView(button("Register Device", v -> createDevice())); root.addView(button("Refresh Devices", v -> loadDevices()));
+        deviceName = input("Device display name"); root.addView(deviceName);
+        root.addView(button("Refresh Devices", v -> loadDevices()));
         deviceId = input("Enrolled Device ID"); root.addView(deviceId);
+        root.addView(button("Scan Device QR", v -> scanDeviceQr()));
+        root.addView(label("QR contains Device identity only. Backend Store authorization and enrollment are checked separately."));
+        root.addView(button("Claim scanned Device and prepare Wi-Fi", v -> claimScannedDevice()));
         root.addView(button("Create provisioning session", v -> createProvisioningSession()));
         softApSsid = input("Device SoftAP SSID (for example PulseLink-XXXX)"); root.addView(softApSsid);
         wifiSsid = input("Test Wi-Fi SSID"); root.addView(wifiSsid);
@@ -72,7 +80,6 @@ public final class MainActivity extends Activity {
     private void loadStores() { run("Loading stores", () -> { JSONArray a=api().stores(requireAccess()); return format(a,"id","name"); }); }
     private void createStore() { run("Creating store", () -> { api().createStore(requireAccess(),storeName.getText().toString().trim(),storeSlug.getText().toString().trim(),""); return "Store created as OWNER. Refresh stores."; }); }
     private void loadDevices() { String id=storeId.getText().toString().trim(); if(id.isBlank()){devices.setText("Select a Store ID first");return;} run("Loading devices", () -> format(api().devices(requireAccess(),id),"id","name","status","provisioningState","enrollmentStatus")); }
-    private void createDevice() { String id=storeId.getText().toString().trim(), name=deviceName.getText().toString().trim(); if(id.isBlank()||name.isBlank()){devices.setText("Store ID and Device name are required");return;} run("Registering device", () -> { JSONObject d=api().createDevice(requireAccess(),id,name).getJSONObject("data"); return "Registered: "+d.optString("id")+" / "+d.optString("status")+" / "+d.optString("provisioningState"); }); }
     private void createProvisioningSession() {
         String selectedStore = storeId.getText().toString().trim();
         String selectedDevice = deviceId.getText().toString().trim();
@@ -105,6 +112,175 @@ public final class MainActivity extends Activity {
             }
             return "Provisioning session ready; confirm the device physically before continuing.";
         });
+    }
+
+    private void scanDeviceQr() {
+        if (storeId.getText().toString().trim().isBlank()) {
+            status.setText("Select a Store before scanning a Device");
+            return;
+        }
+        status.setText("Opening QR scanner…");
+        GmsBarcodeScannerOptions options = new GmsBarcodeScannerOptions.Builder()
+                .setBarcodeFormats(Barcode.FORMAT_QR_CODE)
+                .enableAutoZoom()
+                .build();
+        GmsBarcodeScanner scanner = GmsBarcodeScanning.getClient(this, options);
+        scanner.startScan()
+                .addOnSuccessListener(barcode -> verifyScannedDevice(barcode == null ? null : barcode.getRawValue()))
+                .addOnCanceledListener(() -> status.setText("Device scan cancelled"))
+                .addOnFailureListener(error -> status.setText("QR scanner unavailable. Check Google Play services and camera access."));
+    }
+
+    private void verifyScannedDevice(String qrValue) {
+        String scannedId = DeviceQrIdentity.parse(qrValue);
+        String selectedStore = storeId.getText().toString().trim();
+        if (scannedId == null) {
+            status.setText("QR must contain only a valid PulseLink Device ID");
+            return;
+        }
+        status.setText("Checking Device enrollment and Store access…");
+        executor.execute(() -> {
+            try {
+                JSONArray ownedDevices = api().devices(requireAccess(), selectedStore);
+                JSONObject match = null;
+                if (ownedDevices != null) {
+                    for (int i = 0; i < ownedDevices.length(); i++) {
+                        JSONObject candidate = ownedDevices.optJSONObject(i);
+                        if (candidate != null && scannedId.equals(candidate.optString("id"))) {
+                            match = candidate;
+                            break;
+                        }
+                    }
+                }
+                if (match == null || !"ENROLLED".equals(match.optString("enrollmentStatus"))) {
+                    if (match != null) {
+                        pendingDeviceClaimId = null;
+                        postStatus("A Device record with this ID is not enrolled. It cannot be claimed using QR identity alone.");
+                        return;
+                    }
+                    pendingDeviceClaimId = scannedId;
+                    runOnUiThread(() -> {
+                        if (!isFinishing() && !isDestroyed()) {
+                            deviceId.setText(scannedId);
+                            devices.setText("Scanned public Device ID: " + scannedId);
+                            status.setText("Device is not in this Store. Review the Device ID, then claim it with live Device proof.");
+                        }
+                    });
+                    return;
+                }
+                pendingDeviceClaimId = null;
+                runOnUiThread(() -> {
+                    if (!isFinishing() && !isDestroyed()) {
+                        deviceId.setText(scannedId);
+                        devices.setText("Scanned Device is enrolled in the selected Store: " + scannedId);
+                        status.setText("Device is enrolled and visible in the selected Store. Continue with a provisioning session.");
+                    }
+                });
+            } catch (Exception failure) {
+                postStatus("Could not verify Device access. Check sign-in and selected Store.");
+            }
+        });
+    }
+
+    private void claimScannedDevice() {
+        final String candidateId = pendingDeviceClaimId;
+        final String selectedStore = storeId.getText().toString().trim();
+        String wifiPermission = Build.VERSION.SDK_INT >= 33
+                ? Manifest.permission.NEARBY_WIFI_DEVICES : Manifest.permission.ACCESS_FINE_LOCATION;
+        if (candidateId == null || selectedStore.isBlank()) {
+            status.setText("Scan an unassigned Device QR and select a Store first");
+            return;
+        }
+        if (Build.VERSION.SDK_INT >= 29 && checkSelfPermission(wifiPermission) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(new String[] { wifiPermission }, 4107);
+            status.setText("Allow nearby Wi-Fi access, then retry the Device claim.");
+            return;
+        }
+        String name = deviceName.getText().toString().trim();
+        if (name.isBlank()) name = "PulseLink button";
+        final String displayName = name;
+        status.setText("Requesting Store-authorized Device claim…");
+        executor.execute(() -> {
+            try {
+                JSONObject claimData = api().createDeviceClaimSession(requireAccess(), selectedStore, candidateId, displayName).getJSONObject("data");
+                if (claimData.optBoolean("alreadyClaimed")) {
+                    JSONObject linked = claimData.getJSONObject("device");
+                    pendingDeviceClaimId = null;
+                    runOnUiThread(() -> {
+                        deviceId.setText(candidateId);
+                        devices.setText("Already linked in this Store: " + candidateId + " — " + linked.optString("status"));
+                        status.setText("Backend confirmed this Device is already linked here. Create a provisioning session to configure Wi-Fi.");
+                    });
+                    return;
+                }
+                JSONObject claimSession = claimData.getJSONObject("session");
+                String ssid = DeviceQrIdentity.softApSsid(candidateId);
+                if (ssid == null) throw new IllegalStateException("Device QR identity is not supported by this firmware profile");
+                runOnUiThread(() -> status.setText("Connect to the Device SoftAP to verify its first-claim proof…"));
+                if (softApConnection != null) softApConnection.close();
+                softApConnection = new SoftApConnection(this);
+                softApConnection.connect(ssid, new SoftApConnection.Listener() {
+                    @Override public void onAvailable(Network network) {
+                        executor.execute(() -> finishDeviceClaim(selectedStore, candidateId, claimData, claimSession));
+                    }
+                    @Override public void onUnavailable() {
+                        pendingDeviceClaimId = candidateId;
+                        runOnUiThread(() -> status.setText("Device SoftAP unavailable. Verify the board is in pairing mode and retry."));
+                    }
+                    @Override public void onLost() {
+                        pendingDeviceClaimId = candidateId;
+                        runOnUiThread(() -> status.setText("Device SoftAP connection lost. Claim was not confirmed."));
+                    }
+                });
+            } catch (Exception failure) {
+                pendingDeviceClaimId = candidateId;
+                postStatus("Device claim could not start. Check Store authorization, Device state and network, then retry.");
+            }
+        });
+    }
+
+    private void finishDeviceClaim(String selectedStore, String candidateId, JSONObject claimData, JSONObject claimSession) {
+        try {
+            CommissioningTransportClient proofClient = new CommissioningTransportClient();
+            JSONObject proof = proofClient.requestEnrollmentProof("http://192.168.4.1", claimData);
+            proofClient.close();
+            if (softApConnection != null) softApConnection.close();
+            JSONObject result = api().completeDeviceClaim(requireAccess(), selectedStore,
+                    claimSession.getString("id"), proof);
+            JSONObject claimedDevice = result.getJSONObject("data");
+            JSONObject provisioning = api().createProvisioningSession(requireAccess(), selectedStore,
+                    candidateId, UUID.randomUUID().toString()).getJSONObject("data");
+            JSONObject sessionInfo = provisioning.getJSONObject("session");
+            JSONArray ownedDevices = api().devices(requireAccess(), selectedStore);
+            JSONObject listed = null;
+            if (ownedDevices != null) for (int i = 0; i < ownedDevices.length(); i++) {
+                JSONObject candidate = ownedDevices.optJSONObject(i);
+                if (candidate != null && candidateId.equals(candidate.optString("id"))) { listed = candidate; break; }
+            }
+            if (listed == null || listed.optString("deviceKey").isBlank() ||
+                    !"ENROLLED".equals(claimedDevice.optString("enrollmentStatus"))) {
+                throw new IllegalStateException("Backend did not confirm enrolled Device state");
+            }
+            provisioning.put("deviceKey", listed.getString("deviceKey"));
+            provisioning.put("deviceId", candidateId);
+            provisioning.put("storeId", selectedStore);
+            provisioningData = provisioning;
+            pendingDeviceClaimId = null;
+            commissioningRun++;
+            if (!commissioning.start(System.currentTimeMillis(), 30 * 60_000L)) {
+                throw new IllegalStateException("Commissioning session is already active");
+            }
+            runOnUiThread(() -> {
+                deviceId.setText(candidateId);
+                softApSsid.setText(DeviceQrIdentity.softApSsid(candidateId));
+                devices.setText("Enrolled and linked: " + candidateId + " — PENDING provisioning");
+                status.setText("Device claim confirmed. Next connect to send Wi-Fi; claim alone does not mean online.");
+            });
+        } catch (Exception failure) {
+            if (softApConnection != null) softApConnection.close();
+            pendingDeviceClaimId = candidateId;
+            runOnUiThread(() -> status.setText("Device proof or claim failed. Device was not confirmed in this Store; scan and retry."));
+        }
     }
     private void provisionOverSoftAp() {
         JSONObject data = provisioningData;

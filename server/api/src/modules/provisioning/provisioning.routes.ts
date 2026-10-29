@@ -15,6 +15,11 @@ import {
   type ProvisioningDatabase,
   ProvisioningError,
 } from "./provisioning.service.js";
+import {
+  completeDeviceClaim,
+  createDeviceClaimSession,
+  type DeviceClaimDatabase,
+} from "./device-claim.service.js";
 
 const storeParams = z.object({ storeId: z.string().min(1).max(128) });
 const sessionParams = z.object({
@@ -26,6 +31,18 @@ const deviceSessionParams = z.object({
   deviceId: z.string().min(1).max(128),
   sessionId: z.string().min(1).max(128),
 });
+const deviceClaimParams = z.object({ storeId: z.string().min(1).max(128), claimSessionId: z.string().min(1).max(128) });
+const createDeviceClaimBody = z.object({
+  deviceId: z.string().regex(/^[A-Za-z0-9_-]{8,128}$/),
+  name: z.string().trim().min(1).max(120),
+}).strict();
+const completeDeviceClaimBody = z.object({
+  challenge: z.string().length(43).regex(/^[A-Za-z0-9_-]{43}$/),
+  publicKeySpkiBase64: z.string().min(32).max(2048).regex(/^[A-Za-z0-9+/]+={0,2}$/),
+  keyVersion: z.number().int().min(1).max(1_000_000),
+  expiresAt: z.number().int().positive(),
+  signatureDerBase64: z.string().min(12).max(108).regex(/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/),
+}).strict();
 const createSessionBody = z.object({
   deviceId: z.string().min(1).max(128),
   idempotencyKey: z.string().min(16).max(128),
@@ -124,6 +141,70 @@ export const provisioningRoutes: FastifyPluginAsync<
       "preHandler",
       createAuthenticationHook(options.verificationKeys),
     );
+
+    protectedApp.post("/stores/:storeId/device-claims", async (request, reply) => {
+      const params = parseOrThrow(storeParams.safeParse(request.params));
+      const body = parseOrThrow(createDeviceClaimBody.safeParse(request.body));
+      const result = await createDeviceClaimSession(
+        app.prisma as unknown as DeviceClaimDatabase,
+        accountId(request), params.storeId, body.deviceId, body.name,
+      );
+      if ("alreadyClaimed" in result) {
+        return reply.send({
+          data: {
+            alreadyClaimed: true,
+            device: {
+              id: result.device.id,
+              name: result.device.name,
+              storeId: result.device.storeId,
+              status: result.device.status,
+              enrollmentStatus: result.device.enrollmentStatus,
+            },
+          },
+          meta: { requestId: request.id },
+        });
+      }
+      return reply.code(201).send({
+        data: {
+          session: {
+            id: result.session.id,
+            deviceId: result.session.deviceId,
+            storeId: result.session.storeId,
+            expiresAt: result.session.expiresAt,
+          },
+          challenge: result.challenge,
+        },
+        meta: { requestId: request.id },
+      });
+    });
+
+    protectedApp.post("/stores/:storeId/device-claims/:claimSessionId/complete", async (request, reply) => {
+      const params = parseOrThrow(deviceClaimParams.safeParse(request.params));
+      const body = parseOrThrow(completeDeviceClaimBody.safeParse(request.body));
+      const device = await completeDeviceClaim(
+        app.prisma as unknown as DeviceClaimDatabase,
+        accountId(request), params.storeId, params.claimSessionId, body.challenge,
+        {
+          publicKeySpkiBase64: body.publicKeySpkiBase64,
+          keyVersion: body.keyVersion,
+          challenge: body.challenge,
+          expiresAt: body.expiresAt,
+          signatureDerBase64: body.signatureDerBase64,
+        }, request.id,
+      );
+      return reply.code(201).send({
+        data: {
+          id: device.id,
+          name: device.name,
+          storeId: device.storeId,
+          status: device.status,
+          provisioningState: device.provisioningState,
+          enrollmentStatus: device.enrollmentStatus,
+          enrollmentKeyVersion: device.enrollmentKeyVersion,
+        },
+        meta: { requestId: request.id },
+      });
+    });
 
     protectedApp.post(
       "/stores/:storeId/provisioning-sessions",

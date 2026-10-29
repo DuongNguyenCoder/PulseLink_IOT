@@ -144,9 +144,15 @@ commissioning_redeem_result_t commissioning_redeem_and_store(
     if (valid) strlcpy(token_copy, token->valuestring, sizeof(token_copy));
     if (response_root != NULL) cJSON_Delete(response_root);
     clear_bytes(response.body, sizeof(response.body));
-    if (!valid) { clear_bytes(token_copy, sizeof(token_copy)); return COMMISSIONING_REDEEM_MALFORMED; }
+    if (!valid || !commissioning_credential_token_format_valid((const uint8_t *)token_copy, strlen(token_copy))) {
+        clear_bytes(token_copy, sizeof(token_copy));
+        return COMMISSIONING_REDEEM_MALFORMED;
+    }
     commissioning_storage_result_t stored = commissioning_credential_storage_save(
         storage, (const uint8_t *)token_copy, strlen(token_copy));
     clear_bytes(token_copy, sizeof(token_copy));
-    return stored == COMMISSIONING_STORAGE_OK ? COMMISSIONING_REDEEM_OK : COMMISSIONING_REDEEM_STORAGE_UNAVAILABLE;
+    if (stored == COMMISSIONING_STORAGE_OK) return COMMISSIONING_REDEEM_OK;
+    if (stored == COMMISSIONING_STORAGE_INVALID) return COMMISSIONING_REDEEM_STORAGE_INVALID;
+    if (stored == COMMISSIONING_STORAGE_IO_ERROR) return COMMISSIONING_REDEEM_STORAGE_IO_ERROR;
+    return COMMISSIONING_REDEEM_STORAGE_UNAVAILABLE;
 }

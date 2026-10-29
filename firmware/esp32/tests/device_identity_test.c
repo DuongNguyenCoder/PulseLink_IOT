@@ -2,6 +2,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 
 #include "device_identity.h"
@@ -81,8 +82,82 @@ static void test_canonical_payload(void) {
     ) == DEVICE_PROVISIONING_PAYLOAD_TOO_SMALL);
 }
 
+static void test_claim_payload_and_device_id(void) {
+    const char *challenge = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+    char payload[512];
+    size_t length = 100U;
+    assert(device_provisioning_build_claim_payload(payload, sizeof(payload), "pl-0123456789ab",
+        "store-1", "claim-1", 7U, "MFkw-test-key", challenge, 1793200000U, &length) == DEVICE_PROVISIONING_PAYLOAD_OK);
+    assert(strcmp(payload, "pulselink-device-claim-v1\npl-0123456789ab\nstore-1\nclaim-1\n7\nMFkw-test-key\nAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n1793200000") == 0);
+    assert(device_provisioning_build_claim_payload(payload, sizeof(payload), "pl-0123456789ab",
+        "store-vector-1", "claim-vector-1", 1U, "c3BraS1wdWJsaWMta2V5",
+        challenge, 2000000000U, &length) == DEVICE_PROVISIONING_PAYLOAD_OK);
+    FILE *fixture = fopen("tests/fixtures/device_claim_v1.hex", "rb");
+    assert(fixture != NULL);
+    char fixture_hex[512];
+    size_t fixture_length = fread(fixture_hex, 1U, sizeof(fixture_hex) - 1U, fixture);
+    assert(fclose(fixture) == 0);
+    while (fixture_length > 0U && (fixture_hex[fixture_length - 1U] == '\n' || fixture_hex[fixture_length - 1U] == '\r')) fixture_length--;
+    fixture_hex[fixture_length] = '\0';
+    assert(length * 2U == fixture_length);
+    for (size_t i = 0U; i < length; ++i) {
+        char actual[3];
+        (void)snprintf(actual, sizeof(actual), "%02x", (unsigned char)payload[i]);
+        assert(actual[0] == fixture_hex[i * 2U] && actual[1] == fixture_hex[i * 2U + 1U]);
+    }
+    uint8_t mac[6] = { 0x02U, 0x11U, 0x22U, 0x33U, 0x44U, 0x55U };
+    char device_id[16];
+    assert(device_provisioning_build_device_id(mac, device_id, sizeof(device_id)));
+    assert(strcmp(device_id, "pl-021122334455") == 0);
+    assert(device_provisioning_build_claim_payload(payload, sizeof(payload), "bad\nid", "store-1",
+        "claim-1", 7U, "key", challenge, 1793200000U, &length) == DEVICE_PROVISIONING_PAYLOAD_INVALID);
+    assert(length == 0U);
+}
+
+static void test_canonical_enrollment_payload_vector(void) {
+    static const char expected_hex[] =
+        "70756c73656c696e6b2d6465766963652d656e726f6c6c6d656e742d76310a"
+        "6465766963652d656e726f6c6c6d656e742d766563746f722d310a370a"
+        "4d466b77457759484b6f5a497a6a3043415159494b6f5a497a6a304441516344"
+        "516741456c706b644b2f47543455432f6777555041635753656a333541353472"
+        "4d546438684d764f374361634374785478756877314d7a6752615253496b5244"
+        "6a353333572f4d6e696f775855754966766f304957774f7637413d3d0a"
+        "4141414141414141414141414141414141414141414141414141414141414141"
+        "41414141414141414141410a31373933323030303030";
+    char payload[512];
+    size_t payload_length = 99U;
+    assert(device_provisioning_build_enrollment_payload(
+        payload, sizeof(payload), "device-enrollment-vector-1", 7U,
+        "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAElpkdK/GT4UC/gwUPAcWSej35A54rMTd8hMvO7CacCtxTxuhw1MzgRaRSIkRDj533W/MniowXUuIfvo0IWwOv7A==",
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", 1793200000U, &payload_length
+    ) == DEVICE_PROVISIONING_PAYLOAD_OK);
+
+    FILE *fixture = fopen("tests/fixtures/device_enrollment_v1.hex", "rb");
+    assert(fixture != NULL);
+    char fixture_hex[sizeof(expected_hex)];
+    size_t fixture_length = fread(fixture_hex, 1U, sizeof(fixture_hex) - 1U, fixture);
+    assert(fclose(fixture) == 0);
+    while (fixture_length > 0U && (fixture_hex[fixture_length - 1U] == '\n' || fixture_hex[fixture_length - 1U] == '\r')) fixture_length--;
+    fixture_hex[fixture_length] = '\0';
+    assert(strcmp(fixture_hex, expected_hex) == 0);
+    assert(payload_length * 2U == strlen(fixture_hex));
+    for (size_t i = 0U; i < payload_length; ++i) {
+        char actual[3];
+        (void)snprintf(actual, sizeof(actual), "%02x", (unsigned char)payload[i]);
+        assert(actual[0] == fixture_hex[i * 2U] && actual[1] == fixture_hex[i * 2U + 1U]);
+    }
+    assert(device_provisioning_build_enrollment_payload(
+        payload, sizeof(payload), "bad\ndevice", 7U,
+        "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAElpkdK/GT4UC/gwUPAcWSej35A54rMTd8hMvO7CacCtxTxuhw1MzgRaRSIkRDj533W/MniowXUuIfvo0IWwOv7A==",
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", 1793200000U, &payload_length
+    ) == DEVICE_PROVISIONING_PAYLOAD_INVALID);
+    assert(payload_length == 0U);
+}
+
 int main(void) {
     test_canonical_payload();
+    test_claim_payload_and_device_id();
+    test_canonical_enrollment_payload_vector();
 
     fake_provider_t fake = { 0 };
     device_identity_t identity;
@@ -115,6 +190,8 @@ int main(void) {
     fake.present = true;
     fake.corrupt = true;
     device_identity_init(&identity, provider(&fake));
-    assert(device_identity_load_or_generate(&identity, false, 1U) == DEVICE_KEY_PROVIDER_CORRUPT);
+    unsigned generate_calls_before_corrupt_load = fake.generate_calls;
+    assert(device_identity_load_or_generate(&identity, true, 1U) == DEVICE_KEY_PROVIDER_CORRUPT);
+    assert(fake.generate_calls == generate_calls_before_corrupt_load);
     return 0;
 }

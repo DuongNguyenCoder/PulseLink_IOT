@@ -89,13 +89,31 @@ bool commissioning_wifi_controller_start(
     controller->retry_at_ms = now_ms;
     controller->retry_count = 0U;
     controller->active = true;
+    controller->backend_recovery = false;
     (void)attempt_connect(controller, now_ms);
     return controller->active;
 }
 
+bool commissioning_wifi_controller_start_backend_recovery(
+    commissioning_wifi_controller_t *controller,
+    uint32_t now_ms
+) {
+    if (controller == NULL || controller->active ||
+        commissioning_state(controller->lifecycle) != COMMISSIONING_CREDENTIAL_PERSISTING) return false;
+    controller->generation++;
+    if (controller->generation == 0U) controller->generation++;
+    controller->deadline_at_ms = now_ms + 24U * 60U * 60U * 1000U;
+    controller->retry_at_ms = now_ms;
+    controller->retry_count = 0U;
+    controller->backend_recovery = true;
+    controller->active = true;
+    clear_credentials(controller);
+    return true;
+}
+
 void commissioning_wifi_controller_tick(commissioning_wifi_controller_t *controller, uint32_t now_ms) {
     if (controller == NULL || !controller->active) return;
-    if ((uint32_t)(now_ms - controller->deadline_at_ms) < 0x80000000U && now_ms >= controller->deadline_at_ms) {
+    if ((int32_t)(now_ms - controller->deadline_at_ms) >= 0) {
         commissioning_fail(controller->lifecycle);
         terminal_cleanup(controller, true);
         return;
@@ -127,6 +145,8 @@ void commissioning_wifi_controller_on_event(
         case COMMISSIONING_WIFI_EVENT_DISCONNECTED:
         case COMMISSIONING_WIFI_EVENT_AUTH_FAILED:
         case COMMISSIONING_WIFI_EVENT_AP_NOT_FOUND:
+            /* Recovery retains the persisted network config; the runtime reconnect task retries it. */
+            if (controller->backend_recovery) break;
             if (commissioning_state(controller->lifecycle) == COMMISSIONING_CONNECTING_TO_WIFI ||
                 commissioning_state(controller->lifecycle) == COMMISSIONING_WIFI_CONNECTED) {
                 schedule_retry(controller, now_ms);
@@ -166,6 +186,10 @@ bool commissioning_wifi_controller_cancel(commissioning_wifi_controller_t *contr
 
 uint32_t commissioning_wifi_controller_generation(const commissioning_wifi_controller_t *controller) {
     return controller == NULL ? 0U : controller->generation;
+}
+
+bool commissioning_wifi_controller_is_backend_recovery(const commissioning_wifi_controller_t *controller) {
+    return controller != NULL && controller->active && controller->backend_recovery;
 }
 
 bool commissioning_wifi_controller_is_active(const commissioning_wifi_controller_t *controller) {

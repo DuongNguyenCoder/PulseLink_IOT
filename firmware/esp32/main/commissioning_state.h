@@ -32,6 +32,7 @@ bool commissioning_begin(
     uint32_t now_ms,
     uint32_t window_ms
 );
+bool commissioning_begin_backend_recovery(commissioning_context_t *context, uint32_t now_ms);
 bool commissioning_accept_physical(commissioning_context_t *context, uint32_t now_ms);
 bool commissioning_transition(commissioning_context_t *context, commissioning_state_t next);
 bool commissioning_consume_session(commissioning_context_t *context);

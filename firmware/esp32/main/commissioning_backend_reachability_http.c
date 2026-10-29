@@ -27,6 +27,7 @@ typedef struct {
     char credential[256];
     uint32_t generation;
     uint32_t timeout_ms;
+    bool check_device_key;
 } status_probe_task_t;
 
 static void clear_sensitive(void *value, size_t length) {
@@ -68,7 +69,7 @@ static commissioning_backend_probe_result_t classify_response(
     bool valid = cJSON_IsString(device_id) && cJSON_IsString(device_key) &&
         cJSON_IsString(provisioning) && cJSON_IsString(enrollment) &&
         strcmp(device_id->valuestring, expected_device_id) == 0 &&
-        strcmp(device_key->valuestring, expected_device_key) == 0 &&
+        (expected_device_key == NULL || strcmp(device_key->valuestring, expected_device_key) == 0) &&
         strcmp(provisioning->valuestring, "PROVISIONED") == 0 &&
         strcmp(enrollment->valuestring, "ENROLLED") == 0;
     if (root != NULL) cJSON_Delete(root);
@@ -99,7 +100,8 @@ static void status_probe_task(void *argument) {
             esp_err_t request_result = esp_http_client_perform(client);
             int status = esp_http_client_get_status_code(client);
             if (request_result == ESP_OK) {
-                result = classify_response(&response, status, task->device_id, task->device_key);
+                result = classify_response(&response, status, task->device_id,
+                    task->check_device_key ? task->device_key : NULL);
             } else {
                 result = COMMISSIONING_BACKEND_PROBE_NETWORK_ERROR;
             }
@@ -126,7 +128,7 @@ bool commissioning_backend_reachability_start_https(
 ) {
     if (reachability == NULL || base_url == NULL || strncmp(base_url, "https://", 8U) != 0 ||
         expected_device_id == NULL || expected_device_id[0] == '\0' || strlen(expected_device_id) >= STATUS_ID_LIMIT ||
-        expected_device_key == NULL || expected_device_key[0] == '\0' || strlen(expected_device_key) >= STATUS_KEY_LIMIT ||
+        (expected_device_key != NULL && (expected_device_key[0] == '\0' || strlen(expected_device_key) >= STATUS_KEY_LIMIT)) ||
         timeout_ms == 0U || reachability->pending ||
         !commissioning_wifi_controller_is_active(reachability->wifi_controller) ||
         !commissioning_credential_storage_is_ready(reachability->credential_storage)) return false;
@@ -142,14 +144,18 @@ bool commissioning_backend_reachability_start_https(
     }
     task->credential[credential_length] = '\0';
     int url_length = snprintf(task->url, sizeof(task->url), "%s/v1/device-status", base_url);
+    int device_id_length = snprintf(task->device_id, sizeof(task->device_id), "%s", expected_device_id);
+    int device_key_length = expected_device_key == NULL ? 0 :
+        snprintf(task->device_key, sizeof(task->device_key), "%s", expected_device_key);
     if (url_length <= 0 || (size_t)url_length >= sizeof(task->url) ||
-        snprintf(task->device_id, sizeof(task->device_id), "%s", expected_device_id) <= 0 ||
-        snprintf(task->device_key, sizeof(task->device_key), "%s", expected_device_key) <= 0) {
+        device_id_length <= 0 || (size_t)device_id_length >= sizeof(task->device_id) ||
+        device_key_length < 0 || (size_t)device_key_length >= sizeof(task->device_key)) {
         clear_sensitive(task, sizeof(*task));
         free(task);
         return false;
     }
     task->reachability = reachability;
+    task->check_device_key = expected_device_key != NULL;
     task->generation = commissioning_wifi_controller_generation(reachability->wifi_controller);
     task->timeout_ms = timeout_ms;
     reachability->generation = task->generation;

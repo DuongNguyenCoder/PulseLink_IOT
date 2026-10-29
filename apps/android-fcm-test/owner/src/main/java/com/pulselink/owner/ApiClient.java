@@ -37,6 +37,13 @@ final class ApiClient {
     JSONObject createDevice(String access, String storeId, String name) throws Exception {
         return post("/v1/stores/" + path(storeId) + "/devices", json("name", name), access);
     }
+    JSONObject createDeviceClaimSession(String access, String storeId, String deviceId, String name) throws Exception {
+        return post("/v1/stores/" + path(storeId) + "/device-claims",
+                json("deviceId", deviceId, "name", name), access);
+    }
+    JSONObject completeDeviceClaim(String access, String storeId, String claimSessionId, JSONObject proof) throws Exception {
+        return post("/v1/stores/" + path(storeId) + "/device-claims/" + path(claimSessionId) + "/complete", proof, access);
+    }
     JSONObject createProvisioningSession(String access, String storeId, String deviceId, String idempotencyKey) throws Exception {
         JSONObject body = json("deviceId", deviceId, "idempotencyKey", idempotencyKey);
         return post("/v1/stores/" + path(storeId) + "/provisioning-sessions", body, access);

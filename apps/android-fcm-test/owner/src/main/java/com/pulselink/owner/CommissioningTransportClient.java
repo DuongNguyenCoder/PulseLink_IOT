@@ -20,6 +20,43 @@ final class CommissioningTransportClient implements AutoCloseable {
     private byte[] transcript;
     private long expiresAt;
 
+    JSONObject requestEnrollmentProof(String baseUrl, JSONObject claimData) throws Exception {
+        if (baseUrl == null || !baseUrl.startsWith("http://") || claimData == null)
+            throw new IllegalArgumentException("Local commissioning context required");
+        JSONObject session = claimData.getJSONObject("session");
+        String deviceId = session.getString("deviceId");
+        String storeId = session.getString("storeId");
+        String claimSessionId = session.getString("id");
+        long expiry = java.time.Instant.parse(session.getString("expiresAt")).getEpochSecond();
+        JSONObject request = new JSONObject().put("deviceId", deviceId).put("storeId", storeId)
+                .put("claimSessionId", claimSessionId).put("challenge", claimData.getString("challenge"))
+                .put("expiresAt", expiry);
+        JSONObject response = postJson(baseUrl + "/v1/commissioning/enrollment-proof", request);
+        String publicKey = response.getString("publicKeySpkiBase64");
+        int keyVersion = response.getInt("keyVersion");
+        String challenge = response.getString("challenge");
+        long responseExpiry = response.getLong("expiresAt");
+        String signature = response.getString("signatureDerBase64");
+        if (!deviceId.equals(response.optString("deviceId")) || !storeId.equals(response.optString("storeId"))
+                || !claimSessionId.equals(response.optString("claimSessionId"))
+                || !claimData.getString("challenge").equals(challenge) || expiry != responseExpiry
+                || keyVersion < 1 || responseExpiry <= System.currentTimeMillis() / 1000L)
+            throw new SecurityException("Device claim context mismatch");
+        byte[] transcript = DeviceClaimTranscript.build(deviceId, storeId, claimSessionId, keyVersion,
+                publicKey, challenge, responseExpiry);
+        boolean verified;
+        try {
+            verified = CommissioningCrypto.verifySignature(Base64.getDecoder().decode(publicKey), transcript,
+                    Base64.getDecoder().decode(signature));
+        } finally {
+            java.util.Arrays.fill(transcript, (byte) 0);
+        }
+        if (!verified) throw new SecurityException("Device claim proof rejected");
+        return new JSONObject().put("challenge", challenge).put("publicKeySpkiBase64", publicKey)
+                .put("keyVersion", keyVersion).put("expiresAt", responseExpiry)
+                .put("signatureDerBase64", signature);
+    }
+
     void handshake(
             String baseUrl,
             String sessionId,

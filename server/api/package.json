@@ -10,6 +10,7 @@
     "test-device:create": "tsx scripts/create-test-device.ts",
     "test-recipient:prepare": "tsx scripts/prepare-test-recipient.ts",
     "test-push-token:register": "tsx scripts/register-test-push-token.ts",
+    "operator:build-enrollment-request": "tsx scripts/build-device-enrollment-request.ts",
     "production:recipient:prepare": "tsx scripts/prepare-production-fcm-recipient.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",

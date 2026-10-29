@@ -33,6 +33,7 @@ typedef struct {
     uint32_t retry_backoff_ms;
     uint32_t retry_backoff_max_ms;
     bool active;
+    bool backend_recovery;
 } commissioning_wifi_controller_t;
 
 bool commissioning_wifi_controller_init(
@@ -51,6 +52,10 @@ bool commissioning_wifi_controller_start(
     const char *password,
     uint32_t now_ms,
     uint32_t timeout_ms
+);
+bool commissioning_wifi_controller_start_backend_recovery(
+    commissioning_wifi_controller_t *controller,
+    uint32_t now_ms
 );
 
 void commissioning_wifi_controller_tick(
@@ -77,4 +82,5 @@ bool commissioning_wifi_controller_fail(
 bool commissioning_wifi_controller_cancel(commissioning_wifi_controller_t *controller);
 uint32_t commissioning_wifi_controller_generation(const commissioning_wifi_controller_t *controller);
 bool commissioning_wifi_controller_is_active(const commissioning_wifi_controller_t *controller);
+bool commissioning_wifi_controller_is_backend_recovery(const commissioning_wifi_controller_t *controller);
 

@@ -62,11 +62,23 @@ static void test_failure_is_terminal(void) {
     assert(!commissioning_begin(&context, 20U, 1000U));
 }
 
+static void test_backend_recovery_is_bounded_and_starts_before_online(void) {
+    commissioning_context_t context;
+    commissioning_init(&context);
+    assert(commissioning_begin_backend_recovery(&context, 100U));
+    assert(commissioning_state(&context) == COMMISSIONING_CREDENTIAL_PERSISTING);
+    assert(commissioning_session_consumed(&context));
+    assert(!commissioning_expire_if_needed(&context, 101U));
+    assert(commissioning_expire_if_needed(&context, 100U + 24U * 60U * 60U * 1000U));
+    assert(commissioning_state(&context) == COMMISSIONING_EXPIRED);
+}
+
 int main(void) {
     test_happy_path_and_consume_once();
     test_retry_path_is_bounded_by_terminal_failure();
     test_invalid_order_and_cancel();
     test_expiry_and_wrap_safe_deadline();
     test_failure_is_terminal();
+    test_backend_recovery_is_bounded_and_starts_before_online();
     return 0;
 }

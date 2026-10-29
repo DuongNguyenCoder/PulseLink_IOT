@@ -89,23 +89,32 @@ remains unverified.
 The identity preparation sources are compiled into the firmware component:
 `device_identity.c` provides a provider boundary and
 `device_provisioning_payload.c` reproduces the backend's versioned canonical
-payload format. `esp_device_identity_provider.c` implements a conditional
-ESP-IDF adapter using NVS and mbedTLS, but it is compiled into an unavailable
-stub unless both `CONFIG_PULSELINK_DEVICE_IDENTITY_NVS_PROVIDER=y` and
-`CONFIG_NVS_ENCRYPTION=y` are present. This guard prevents an accidental
-normal-NVS identity implementation.
-
-Do not enable the provider merely to make a build pass. Before enabling it on
-a device, review the NVS security-key partition/initialization process, the
-Flash Encryption and Secure Boot policy, factory provisioning and recovery.
-No eFuse or flash-security configuration is changed by a firmware build.
+payload format. `esp_device_identity_provider.c` implements an opt-in ESP-IDF
+adapter using NVS and mbedTLS. The MVP profile stores identity private keys in
+ordinary NVS, where they are extractable from raw flash; this is a documented
+TOFU limitation, not protected-at-rest storage.
 
 ### Identity-provider compile-only profile
 
-`sdkconfig.identity-provider.defaults` is a deliberately isolated profile for
-compiling the encrypted-NVS provider branch. It must be used with a separate
-build directory and SDKCONFIG output, never by overwriting the local operational
-`sdkconfig`. It sets only `CONFIG_NVS_ENCRYPTION=y` and
-`CONFIG_PULSELINK_DEVICE_IDENTITY_NVS_PROVIDER=y`; it does **not** create NVS
+`sdkconfig.identity-provider.defaults` is a legacy isolated compile profile.
+It must be used with a separate build directory and SDKCONFIG output, never by
+overwriting the local operational `sdkconfig`. It does **not** create NVS
 security keys, provision Flash Encryption/Secure Boot, prove persistence, or
 authorize flashing the resulting image.
+
+### Commissioning MVP compile profile
+
+`sdkconfig.commissioning-mvp.defaults` opts in to first-boot P-256 identity
+generation and operational-token persistence in ordinary NVS. It explicitly
+leaves NVS Encryption disabled and provides reboot-oriented persistence only,
+not confidentiality against raw flash access. Keep it in a separate build
+directory:
+
+```powershell
+& $idfPython "$idfRoot\tools\idf.py" -B build/commissioning-mvp `
+  -D 'SDKCONFIG=build/commissioning-mvp/sdkconfig' `
+  -D 'SDKCONFIG_DEFAULTS=sdkconfig.defaults;sdkconfig.commissioning-mvp.defaults' build
+```
+
+This profile is compile evidence only. Verify actual board identity, GPIO,
+Wi-Fi persistence and recovery before any flash or runtime test.

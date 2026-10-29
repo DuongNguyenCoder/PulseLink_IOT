@@ -22,6 +22,11 @@ cc -std=c17 -Wall -Wextra -Werror -I main `
 tests/device_identity_test.exe
 ```
 
+This runner also reads `tests/fixtures/device_enrollment_v1.hex` and verifies
+that the firmware enrollment transcript encoder matches the backend's shared
+P-256 enrollment transcript bytes. The fixture contains only public test data
+and is not a provisioned identity.
+
 The commissioning controller is a transport-independent state machine. It
 does not open SoftAP, handle Wi-Fi credentials or redeem a backend session:
 
@@ -50,6 +55,19 @@ tests/commissioning_protocol_test.exe
 
 The provider in this test is an in-memory test double only. It is not linked
 into production firmware and does not represent secure private-key storage.
+
+`commissioning_credential_storage_test.c` also checks the backend operational
+token's 43-character base64url format and output-buffer clearing on failures.
+The test `sdkconfig.h` intentionally does not define `CONFIG_NVS_ENCRYPTION`;
+the MVP NVS adapter's opt-in is a persistence choice, not an at-rest security
+claim. `sdkconfig.commissioning-mvp.defaults` is a compile profile only and
+must not be treated as board approval or a protected-storage configuration.
+
+`esp_device_credential_storage_test.c` compiles the ESP-IDF NVS provider against
+a test-only NVS shim. It covers unprovisioned reads, token validation, save plus
+read-back, commit/read errors and corrupted records. This checks adapter logic
+and error mapping; it does not emulate flash wear, power-loss atomicity or
+hardware reboot durability.
 
 The ESP32 cross-compiler can syntax-check this runner, but executing an
 Xtensa binary on the host is not runtime evidence. An ESP-IDF Unity target may
