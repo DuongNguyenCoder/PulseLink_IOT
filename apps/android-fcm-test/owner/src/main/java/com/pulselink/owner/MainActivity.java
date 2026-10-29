@@ -12,6 +12,8 @@ import com.google.mlkit.vision.barcode.common.Barcode;
 import android.text.InputType;
 import android.view.View;
 import android.widget.*;
+import android.content.pm.PackageManager;
+import com.google.firebase.messaging.FirebaseMessaging;
 import org.json.JSONArray;
 import org.json.JSONObject;
 import java.util.UUID;
@@ -74,9 +76,24 @@ public final class MainActivity extends Activity {
         return scroll;
     }
     private void signup() { String e=email.getText().toString().trim(), p=password.getText().toString(); if(e.indexOf('@')<1||p.length()<8){status.setText("Enter a valid email and password (8+ characters)");return;} run("Signing up", () -> { api().signup(e,p); return "Account created. Verify email before signing in."; }); }
-    private void login() { String e=email.getText().toString().trim(), p=password.getText().toString(); if(e.indexOf('@')<1||p.length()<8){status.setText("Enter valid credentials");return;} run("Signing in", () -> { JSONObject data=api().login(e,p,installationId()); JSONObject tokens=data.getJSONObject("data"); session.save(tokens.getString("accessToken"),tokens.getString("refreshToken"),api.getText().toString().trim()); return "Signed in securely."; }); }
-    private void signout() { String refresh=session.refreshToken(); session.clear(); status.setText("Signed out"); if(refresh!=null) executor.execute(() -> { try { if(session.apiBase()!=null) new ApiClient(session.apiBase()).logout(refresh); } catch(Exception ignored){} }); }
-    private void restoreSession() { if (session.accessToken() != null) status.setText("Session restored. Refresh stores to verify access."); }
+    private void login() { String e=email.getText().toString().trim(), p=password.getText().toString(); if(e.indexOf('@')<1||p.length()<8){status.setText("Enter valid credentials");return;} run("Signing in", () -> { String installation = installationId(); JSONObject data=api().login(e,p,installation); JSONObject tokens=data.getJSONObject("data"); String base=api.getText().toString().trim(); session.save(tokens.getString("accessToken"),tokens.getString("refreshToken"),base,installation); syncPushToken(); return "Signed in. Push registration is being verified."; }); }
+    private void signout() { String refresh=session.refreshToken(), access=session.accessToken(), base=session.apiBase(), installation=session.installationId(); session.clear(); status.setText("Signed out"); if(refresh!=null) executor.execute(() -> { try { if(base!=null && access!=null && installation!=null) new ApiClient(base).revokeInstallation(access,installation); if(base!=null) new ApiClient(base).logout(refresh); } catch(Exception ignored){} }); }
+    private void restoreSession() { if (session.accessToken() != null) { if(session.apiBase()!=null) api.setText(session.apiBase()); status.setText("Session restored. Refresh stores to verify access."); syncPushToken(); } }
+    private void syncPushToken() {
+        runOnUiThread(() -> {
+            if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                requestPermissions(new String[] { Manifest.permission.POST_NOTIFICATIONS }, 4110);
+            }
+        });
+        FirebaseMessaging.getInstance().getToken().addOnSuccessListener(token -> {
+            session.saveFcmToken(token);
+            executor.execute(() -> {
+                if (session.accessToken() == null) return;
+                try { OwnerPushRegistration.sync(session, token); }
+                catch (Exception ignored) { runOnUiThread(() -> postStatus("Signed in, but push registration failed. Check staging notification configuration and sign in again.")); }
+            });
+        }).addOnFailureListener(error -> postStatus("Signed in, but FCM token is unavailable. Check Firebase app configuration."));
+    }
     private void loadStores() { run("Loading stores", () -> { JSONArray a=api().stores(requireAccess()); return format(a,"id","name"); }); }
     private void createStore() { run("Creating store", () -> { api().createStore(requireAccess(),storeName.getText().toString().trim(),storeSlug.getText().toString().trim(),""); return "Store created as OWNER. Refresh stores."; }); }
     private void loadDevices() { String id=storeId.getText().toString().trim(); if(id.isBlank()){devices.setText("Select a Store ID first");return;} run("Loading devices", () -> format(api().devices(requireAccess(),id),"id","name","status","provisioningState","enrollmentStatus")); }

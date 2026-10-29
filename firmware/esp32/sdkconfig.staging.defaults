@@ -1,0 +1,13 @@
+# Non-secret staging target for the commissioned ESP32 runtime.
+# Operational credential and identity still use ordinary NVS in the MVP profile.
+# Do not flash until board identity, wiring and recovery have been verified.
+CONFIG_PULSELINK_COMMISSIONING_ENABLED=y
+CONFIG_PULSELINK_COMMISSIONING_BUTTON_GPIO=4
+CONFIG_PULSELINK_BUTTON_GPIO=4
+CONFIG_PULSELINK_DEVICE_IDENTITY_NVS_PROVIDER=y
+CONFIG_PULSELINK_OPERATIONAL_CREDENTIAL_STORAGE=y
+CONFIG_PULSELINK_REDEMPTION_BASE_URL="https://pulselink.chuanxinstore.com"
+CONFIG_PULSELINK_EVENT_ENDPOINT_URL="https://pulselink.chuanxinstore.com/v1/device-events"
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y
+CONFIG_NVS_ENCRYPTION=n
+CONFIG_COMPILER_OPTIMIZATION_SIZE=y

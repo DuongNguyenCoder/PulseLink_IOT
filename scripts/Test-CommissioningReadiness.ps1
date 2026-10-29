@@ -3,12 +3,15 @@ param(
     [switch]$ProbeBackend,
     [switch]$CheckTestDatabase,
     [string]$ApprovedPublicDevelopmentHost,
+    [string]$FirmwareSdkconfigPath = 'firmware/esp32/sdkconfig',
     [string]$OutputDirectory = (Join-Path ([System.IO.Path]::GetTempPath()) 'pulselink-commissioning-preflight')
 )
 
 $ErrorActionPreference = 'Stop'
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $apiRoot = Join-Path $repoRoot 'server/api'
+$sdkconfigCandidate = if ([IO.Path]::IsPathRooted($FirmwareSdkconfigPath)) { $FirmwareSdkconfigPath } else { Join-Path $repoRoot $FirmwareSdkconfigPath }
+$sdkConfigPath = if (Test-Path -LiteralPath $sdkconfigCandidate) { (Resolve-Path -LiteralPath $sdkconfigCandidate).Path } else { $sdkconfigCandidate }
 $checks = [System.Collections.Generic.List[object]]::new()
 
 function Add-Check {
@@ -62,7 +65,7 @@ function Read-LocalEnvValue {
 
 function Get-SdkConfigValue {
     param([string]$Name)
-    $file = Join-Path $repoRoot 'firmware/esp32/sdkconfig'
+    $file = $sdkConfigPath
     if (-not (Test-Path -LiteralPath $file)) { return $null }
     foreach ($line in [IO.File]::ReadLines($file)) {
         if ($line -match "^CONFIG_$([regex]::Escape($Name))=(.*)$") { return $Matches[1].Trim('"') }
@@ -203,7 +206,7 @@ foreach ($endpointName in @('redemption','event')) {
         continue
     }
     $endpointUri = $null
-    if ([uri]::TryCreate($endpointValue, [UriKind]::Absolute, [ref]$endpointUri) -and $endpointUri.Scheme -eq 'https' -and (Test-DevelopmentHost $endpointUri.Host)) {
+    if ([uri]::TryCreate($endpointValue, [UriKind]::Absolute, [ref]$endpointUri) -and $endpointUri.Scheme -eq 'https' -and (Test-DevelopmentHost $endpointUri.Host $ApprovedPublicDevelopmentHost)) {
         Add-Check "firmware:$endpointName-origin" 'PASS' 'An HTTPS development endpoint is configured; the endpoint and credentials were not printed or contacted.'
     } else {
         Add-Check "firmware:$endpointName-origin" 'BLOCKED' 'Configured firmware endpoint is not an approved local development HTTPS target; preflight did not contact it.' 'Replace with an explicitly approved development HTTPS origin after verifying its CA and network route.'
@@ -211,6 +214,8 @@ foreach ($endpointName in @('redemption','event')) {
 }
 if ($nvsEncryption -eq 'y' -and $credentialStorageEnabled -eq 'y') {
     Add-Check 'security:credential-provider' 'BLOCKED' 'Kconfig flags alone do not establish key custody, provider registration, or recovery.' 'Obtain the approved key provisioning/recovery policy and verify provider runtime on hardware.'
+} elseif ($credentialStorageEnabled -eq 'y') {
+    Add-Check 'security:credential-provider' 'BLOCKED' 'MVP provider is enabled with ordinary NVS; token and identity key are persistent but extractable from raw flash.' 'Treat this as an explicit MVP limitation; protected-at-rest storage requires an approved key provisioning and recovery policy.'
 } else {
     Add-Check 'security:credential-provider' 'BLOCKED' 'Operational credential storage is not enabled; production provider remains fail-closed.' 'Approve key custody/recovery before implementing or enabling encrypted storage.'
 }

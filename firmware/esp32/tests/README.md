@@ -92,6 +92,16 @@ docker run --rm --network none --read-only `
   "cc -std=c17 -Wall -Wextra -Werror -I main tests/commissioning_crypto_host_test.c -lcrypto -o /tmp/crypto && /tmp/crypto"
 ```
 
+Run the full ten-runner firmware host suite (including the shared crypto
+fixture) from the repository root with:
+
+```powershell
+docker run --rm --network none --read-only `
+  --tmpfs /tmp:rw,exec,nosuid,size=128m `
+  --mount type=bind,src=D:/project-PulseLink,dst=/src,readonly `
+  --workdir /src/firmware/esp32 gcc:13.2.0-bookworm sh tests/run_host_tests.sh
+```
+
 The Android side is run with `:owner:testDebugUnitTest`; both tests read the
 same repository fixture. This proves host C/Java value compatibility, not board
 runtime, secure storage or SoftAP transport behavior.

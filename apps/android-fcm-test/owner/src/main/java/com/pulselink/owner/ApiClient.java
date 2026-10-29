@@ -25,6 +25,14 @@ final class ApiClient {
     JSONObject login(String email, String password, String installationId) throws Exception {
         return post("/v1/auth/login", json("email", email, "password", password, "appInstallationId", installationId, "platform", "ANDROID"), null);
     }
+    JSONObject registerInstallation(String access, String installationId, String fcmToken) throws Exception {
+        InstallationRegistration payload = InstallationRegistration.create(installationId, fcmToken);
+        return post("/v1/installations/", json("installationId", payload.installationId,
+                "platform", payload.platform, "fcmToken", payload.fcmToken), access);
+    }
+    JSONObject revokeInstallation(String access, String installationId) throws Exception {
+        return request("DELETE", "/v1/installations/" + path(installationId), null, access);
+    }
     JSONObject refresh(String token) throws Exception { return post("/v1/auth/refresh", json("refreshToken", token), null); }
     void logout(String token) throws Exception { post("/v1/auth/logout", json("refreshToken", token), null); }
     JSONArray stores(String access) throws Exception { return get("/v1/stores", access).optJSONArray("data"); }

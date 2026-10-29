@@ -18,21 +18,26 @@ final class SecureSession {
     private static final String ACCESS = "access";
     private static final String REFRESH = "refresh";
     private static final String API_BASE = "api_base";
+    private static final String INSTALLATION_ID = "installation_id";
     private final SharedPreferences prefs;
 
     SecureSession(Context context) {
         prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
     }
 
-    synchronized void save(String access, String refresh, String apiBase) {
+    synchronized void save(String access, String refresh, String apiBase, String installationId) {
         prefs.edit().putString(ACCESS, encrypt(access)).putString(REFRESH, encrypt(refresh))
-                .putString(API_BASE, apiBase).apply();
+                .putString(API_BASE, apiBase).putString(INSTALLATION_ID, installationId).apply();
     }
+
+    synchronized void saveFcmToken(String token) { prefs.edit().putString("fcm_token", encrypt(token)).apply(); }
+    synchronized String fcmToken() { return decrypt(prefs.getString("fcm_token", null)); }
+    synchronized String installationId() { return prefs.getString(INSTALLATION_ID, null); }
 
     synchronized String accessToken() { return decrypt(prefs.getString(ACCESS, null)); }
     synchronized String refreshToken() { return decrypt(prefs.getString(REFRESH, null)); }
     synchronized String apiBase() { return prefs.getString(API_BASE, null); }
-    synchronized void clear() { prefs.edit().remove(ACCESS).remove(REFRESH).apply(); }
+    synchronized void clear() { prefs.edit().remove(ACCESS).remove(REFRESH).remove("fcm_token").remove(INSTALLATION_ID).apply(); }
 
     private String encrypt(String value) {
         try {

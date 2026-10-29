@@ -74,9 +74,9 @@ config PULSELINK_COMMISSIONING_BUTTON_GPIO
     range -1 48
     default 4
     help
-        The project wiring currently identifies GPIO4 as the button-to-GND
-        input. Keep commissioning disabled until the board voltage, pull-up and
-        active level are measured on the actual carrier board.
+        The approved MVP board configuration uses GPIO4. Firmware samples it
+        active-low with the internal pull-up; verify actual carrier wiring before
+        flashing or applying electrical assumptions to an unverified board.
 
 config PULSELINK_DEVICE_IDENTITY_NVS_PROVIDER
     bool "Enable NVS device identity provider (private key is extractable without flash protection)"

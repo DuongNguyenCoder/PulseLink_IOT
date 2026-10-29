@@ -118,3 +118,27 @@ directory:
 
 This profile is compile evidence only. Verify actual board identity, GPIO,
 Wi-Fi persistence and recovery before any flash or runtime test.
+
+## Staging commissioning profile
+
+`sdkconfig.staging.defaults` selects the approved staging HTTPS origin and
+GPIO4 for both the physical commissioning gate and operational button. The
+Owner app's `google-services.json` is local Firebase project configuration;
+never copy it into reports or print its contents. Firmware defaults contain no
+Wi-Fi password, device token or per-device key.
+
+Build into an isolated directory so the machine-local `sdkconfig` is not
+overwritten:
+
+```powershell
+& $idfPython "$idfRoot\tools\idf.py" -B build/staging `
+  -D 'SDKCONFIG=build/staging/sdkconfig' `
+  -D 'SDKCONFIG_DEFAULTS=sdkconfig.defaults;sdkconfig.commissioning-mvp.defaults;sdkconfig.staging.defaults' `
+  set-target esp32s3 build
+```
+
+This profile enables the existing ordinary-NVS identity and operational-token
+providers. It does not encrypt NVS, attest genuine hardware, or prove runtime
+recovery; flash extraction can disclose those values. The build is not flash
+authorization. For Owner push delivery, staging backend configuration must use
+`NOTIFICATION_RECIPIENT_MODE=account`; repository default remains `legacy`.

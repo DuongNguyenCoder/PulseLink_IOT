@@ -1832,3 +1832,163 @@ connection strings are intentionally excluded.
      profile has only `0x4aa0` bytes free.
 - Result: `PARTIALLY COMPLETED — BACKEND/POSTGRES, C HOST AND FIRMWARE BUILDS
   PASS; NVS SECURITY ASSUMPTIONS AND PHYSICAL E2E NOT VERIFIED`.
+
+## WP14-RUN-040 — Staging firmware profile and Owner push-notification wiring
+
+- Time: 2026-10-29 12:33:51 +07:00 (Asia/Saigon).
+- Git: HEAD `b624d191dcf90cf99fcbd4ad660a550cb1eb9503`, branch `main`.
+  Worktree was clean at entry; this run changed the files listed below.
+- Goal: prepare a buildable ESP32-S3 staging image, connect the Owner app to
+  the existing FCM installation contract, and verify the available software
+  path toward button-event notifications without writing staging business data.
+- Source/configuration findings: Owner's local Google Services configuration
+  includes `com.pulselink.owner`, but Owner previously had no Firebase
+  Messaging dependency, authenticated installation registration, receiver or
+  notification permission. FCM code existed in the separate diagnostic app.
+  Backend already exposes authenticated `POST /v1/installations/` and
+  `DELETE /v1/installations/:installationId`; the event worker emits `eventId`
+  and `eventType` data. Repository default `NOTIFICATION_RECIPIENT_MODE` is
+  `legacy`, so staging must explicitly use `account` for Owner installations.
+  Firmware's checked-in defaults left both endpoints and event GPIO unset;
+  commissioning already used GPIO4 active-low with pull-up. Provider is
+  ordinary NVS and does not protect identity/token against raw-flash extraction.
+- Files changed:
+  - `firmware/esp32/sdkconfig.staging.defaults` (new): staging HTTPS origins,
+    commissioning and event GPIO4, certificate bundle, ordinary-NVS profile,
+    size optimization; no credentials or Wi-Fi configuration.
+  - `firmware/esp32/main/Kconfig.projbuild`: align GPIO4 help with the approved
+    MVP decision while retaining the requirement to verify wiring before flash.
+  - `docs/development/firmware-build.md`: isolated staging build command and
+    security/notification-mode caveats.
+  - `apps/android-fcm-test/owner/build.gradle.kts`, `AndroidManifest.xml`:
+    Firebase Messaging, conditional Google Services plugin, notification
+    permission and non-exported FCM service.
+  - Owner `ApiClient.java`, `InstallationRegistration.java` (new),
+    `OwnerPushRegistration.java` (new), `SecureSession.java`, `MainActivity.java`,
+    `OwnerMessagingService.java` (new): authenticated token registration,
+    access-token refresh on 401, encrypted local token/session storage,
+    revocation on sign-out, token refresh handling and safe event notification.
+  - `apps/android-fcm-test/owner/src/test/.../ApiClientTest.java`: registration
+    payload/validation coverage using a JVM-testable value object.
+  - `scripts/Test-CommissioningReadiness.ps1`: selectable sdkconfig path,
+    approved public development host passed to firmware endpoint checks, and
+    accurate ordinary-NVS blocker detail.
+  - `firmware/esp32/tests/run_host_tests.sh` (new), tests README: reproducible
+    read-only 10-runner C host harness.
+  - This log and `docs/audits/wp14-9-end-to-end-commissioning-report.md`.
+- Fresh commands/results:
+  - `git status --short`, `git rev-parse HEAD`, `git branch --show-current`:
+    PASS; clean entry, HEAD/branch as above.
+  - `.\gradlew.bat :owner:testDebugUnitTest :owner:assembleDebug --rerun-tasks`:
+    first run FAIL (exit 1), 20 tests/1 failure because Android's JVM stub
+    `org.json.JSONObject.getString()` did not provide runtime JSON behavior.
+    Replaced the test seam with a plain registration value object; rerun PASS
+    (exit 0), 20 passed, 0 failed, 0 skipped. APK:
+    `apps/android-fcm-test/owner/build/outputs/apk/debug/owner-debug.apk`,
+    3,966,318 bytes. Gradle required elevated access to its existing user cache.
+  - ESP-IDF first invocation FAIL (exit 1): CMake absent from PATH. Second
+    invocation FAIL before compile: Xtensa compiler absent from PATH. Third
+    compile used the installed toolchain but debug optimization produced
+    `0x102080`, exceeding the unchanged `0x100000` app partition by `0x2080`.
+    Added size optimization to staging only, then ran isolated
+    `idf.py ... fullclean set-target esp32s3 build` and final
+    `idf.py ... build` with ESP-IDF 5.5.5, CMake 3.30.2, Ninja 1.12.1,
+    installed Xtensa/RISC-V toolchain and `NINJAFLAGS=-j1`: PASS (exit 0).
+    Final `build/staging/pulselink_firmware.bin`: `0xebc80` bytes;
+    `0x14380` bytes free in `0x100000`. ESP-IDF printed a missing
+    `ESP_ROM_ELF_DIR` gdbinit warning, but compilation/link/partition check
+    completed successfully. No partition or security setting was weakened.
+  - `docker run --rm --network none --read-only --tmpfs
+    /tmp:rw,exec,nosuid,size=128m --mount type=bind,src=D:/project-PulseLink,
+    dst=/src,readonly --workdir /src/firmware/esp32 gcc:13.2.0-bookworm
+    sh tests/run_host_tests.sh`: PASS (exit 0), 10 runners passed, 0 failed,
+    0 skipped. Docker required elevated access to its engine pipe.
+  - Staging preflight with `-ProbeBackend`, the explicitly approved host,
+    `-FirmwareSdkconfigPath firmware/esp32/build/staging/sdkconfig`, and
+    `-CheckTestDatabase` omitted: final **18 PASS, 0 FAIL, 1 BLOCKED,
+    2 SKIPPED**, exit 1 by design. `/health/live` and `/health/ready` each
+    passed HTTPS certificate/hostname validation; only GET requests were sent.
+    The BLOCKED item is extractable ordinary-NVS identity/operational token;
+    SKIPPED items are database target and API origin runtime probing. An early
+    sandbox attempt had two health probe failures; an elevated retry passed
+    `/health/ready` but timed out on `/health/live`; final rerun passed both.
+    Fixed preflight initially rejected the explicitly approved firmware host;
+    after passing `ApprovedPublicDevelopmentHost` into that check, both staging
+    endpoint checks passed. No DB URL was loaded or database queried.
+  - `adb devices -l`, `adb shell getprop`, package lookup: one authorized
+    Android API 35 handset; Owner was initially absent. `adb install
+    apps/android-fcm-test/owner/build/outputs/apk/debug/owner-debug.apk`:
+    PASS (`Success`). `adb shell monkey -p com.pulselink.owner 1`: PASS,
+    activity launched and process observed. No account credentials were
+    entered. A Windows `Win32_SerialPort` query returned no rows; preflight
+    enumerated one serial interface without opening it, but did not prove that
+    it is COM4 or identify the ESP32 board/revision.
+  - `git diff --check`: PASS (exit 0); Git reported LF-to-CRLF advisories.
+  - `git status --short` / final artifact size checks: PASS; generated staging
+    image and APK exist at paths above. Build output remains under ignored
+    `firmware/esp32/build/staging`.
+- Fresh vs historical evidence: all results listed above are fresh for
+  RUN-040. RUN-039 backend/DB tests, migration and earlier firmware profiles
+  remain historical; backend source was unchanged and its suites were not
+  rerun. The user reports staging migration/deployment; this run only confirmed
+  the read-only readiness endpoint, not migration version or business APIs.
+- Errors and resolution: JVM JSON-stub assertion replaced by a pure DTO test;
+  missing CMake/toolchain PATH corrected using already-installed ESP-IDF tools;
+  stale isolated sdkconfig was regenerated in the run-created staging build
+  directory so size optimization took effect; firmware fit the existing
+  partition. Preflight host allow-list propagation was corrected and rerun.
+- Security decisions: no credential or Wi-Fi password entered into command,
+  source or report; no staging sign-up/store/device writes; no FCM/email send;
+  no DB operation; no COM port open, board reset/flash/erase or eFuse/security
+  provisioning. TLS validation remains enabled. MVP staging image intentionally
+  uses ordinary NVS; its key/token material is not confidential at rest.
+- Open blockers:
+  1. Actual Owner push requires deployed staging `NOTIFICATION_RECIPIENT_MODE`
+     set to `account`, valid server-side FCM sender configuration and an active
+     notification worker. The repository default remains `legacy`; remote
+     runtime configuration was not inspected or changed.
+  2. No account sign-up/email verification, Store creation, Device claim,
+     provisioning, Wi-Fi transfer, redemption, ONLINE status, event or push was
+     executed. No user credentials were available/entered and staging writes
+     were intentionally avoided.
+  3. COM4/board model/revision and a recovery path are unverified. No serial
+     port was opened and no firmware was flashed.
+  4. Ordinary NVS allows raw-flash extraction of identity private key and
+     operational credential; this is not protected-at-rest evidence.
+  5. No actual button press, backend Event commit/ACK, reboot recovery or FCM
+     receipt has been verified on hardware.
+- Next actions:
+  1. Confirm staging backend uses account recipients and its FCM sender/worker
+     is healthy; then complete account verification and link a test Store/board.
+  2. Identify COM4's USB VID/PID and visually confirm the ESP32-S3 board and
+     recovery procedure before any serial or flash operation.
+  3. Flash only after board/recovery confirmation; use the staging binary and
+     test Wi-Fi entered interactively in Owner app; verify enrollment, redemption,
+     authenticated status, event ACK and push end-to-end.
+  4. Reboot and confirm identity/token recovery; document the accepted ordinary
+     NVS exposure or adopt an approved protected-storage policy before wider use.
+- Result: `PARTIALLY COMPLETED — STAGING BUILD AND OWNER APP READY; PHYSICAL
+  COMMISSIONING AND PUSH DELIVERY NOT VERIFIED`.
+
+### WP14-RUN-040 append-only verification addendum
+
+- After the RUN-040 entry was appended, `OwnerPushRegistration` gained a
+  session equality guard so a delayed access-token refresh cannot restore an
+  Owner session after sign-out. Android tests/build were rerun against that
+  final source: **PASS**, exit 0; 20 passed, 0 failed, 0 skipped. Final APK
+  remains 3,966,318 bytes.
+- The previously built APK had installed and launched on the API 35 phone.
+  An update install of the final rebuilt APK was attempted with
+  `adb install -r .../owner-debug.apk`, but Android returned
+  `INSTALL_FAILED_USER_RESTRICTED: Install canceled by user`; therefore the
+  final APK is built but **not confirmed installed**. The previously installed
+  app process remained running. No attempt was made to bypass the phone's
+  installation restriction.
+- Final preflight was rerun against the final APK and staging sdkconfig with
+  only the approved health GETs: **18 PASS, 0 FAIL, 1 BLOCKED, 2 SKIPPED**,
+  exit 1 by design. `/health/live` and `/health/ready` both passed. The single
+  blocker remains ordinary-NVS extractability; database and runtime API-origin
+  checks remain skipped.
+- No account/API writes, database access, real FCM send, serial open or board
+  operation occurred after the original RUN-040 entry. This addendum corrects
+  the install-state detail without changing prior run history.
