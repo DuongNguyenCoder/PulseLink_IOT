@@ -5,14 +5,18 @@
 #include <string.h>
 
 #include "cJSON.h"
+#include "commissioning_http_response_policy.h"
 #include "esp_crt_bundle.h"
 #include "esp_http_client.h"
+#include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
 #define STATUS_RESPONSE_LIMIT 768U
 #define STATUS_ID_LIMIT 128U
 #define STATUS_KEY_LIMIT 256U
+
+static const char *TAG = "device_status";
 
 typedef struct {
     char body[STATUS_RESPONSE_LIMIT + 1U];
@@ -99,7 +103,16 @@ static void status_probe_task(void *argument) {
             esp_http_client_set_header(client, "Authorization", authorization);
             esp_err_t request_result = esp_http_client_perform(client);
             int status = esp_http_client_get_status_code(client);
-            if (request_result == ESP_OK) {
+            if (status == 401 || status == 403) {
+                ESP_LOGE(TAG, "authenticated status rejected status=%d credential_source=operational_nvs credential_present=yes http_result=%s",
+                    status, esp_err_to_name(request_result));
+            } else if (request_result != ESP_OK && status == 0) {
+                ESP_LOGW(TAG, "authenticated status transport failed status=0 http_result=%s socket_errno=%d",
+                    esp_err_to_name(request_result), esp_http_client_get_errno(client));
+            } else if (status >= 500) {
+                ESP_LOGW(TAG, "authenticated status server error status=%d", status);
+            }
+            if (commissioning_http_response_received(request_result == ESP_OK, status)) {
                 result = classify_response(&response, status, task->device_id,
                     task->check_device_key ? task->device_key : NULL);
             } else {

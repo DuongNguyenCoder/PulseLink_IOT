@@ -52,6 +52,30 @@ static void test_expiry_and_wrap_safe_deadline(void) {
     assert(!commissioning_accept_physical(&context, 51U));
 }
 
+static void test_pairing_window_outlives_physical_press_window(void) {
+    commissioning_context_t context;
+    commissioning_init(&context);
+    assert(commissioning_begin(&context, 1000U, COMMISSIONING_PAIRING_WINDOW_MS));
+    assert(commissioning_accept_physical(&context, 2500U));
+    assert(commissioning_start_softap_window(&context, 30000U, COMMISSIONING_PAIRING_WINDOW_MS));
+    assert(!commissioning_expire_if_needed(&context, 329999U));
+    assert(commissioning_state(&context) == COMMISSIONING_SOFTAP_ACTIVE);
+    assert(commissioning_expire_if_needed(&context, 30000U + COMMISSIONING_PAIRING_WINDOW_MS));
+    assert(commissioning_state(&context) == COMMISSIONING_EXPIRED);
+}
+
+static void test_softap_deadline_requires_active_state_and_positive_window(void) {
+    commissioning_context_t context;
+    commissioning_init(&context);
+    assert(!commissioning_start_softap_window(&context, 1U, 100U));
+    assert(commissioning_begin(&context, 10U, 1000U));
+    assert(commissioning_accept_physical(&context, 20U));
+    assert(!commissioning_start_softap_window(&context, 30U, 0U));
+    assert(commissioning_start_softap_window(&context, 30U, 100U));
+    assert(!commissioning_expire_if_needed(&context, 129U));
+    assert(commissioning_expire_if_needed(&context, 130U));
+}
+
 static void test_failure_is_terminal(void) {
     commissioning_context_t context;
     commissioning_init(&context);
@@ -78,6 +102,8 @@ int main(void) {
     test_retry_path_is_bounded_by_terminal_failure();
     test_invalid_order_and_cancel();
     test_expiry_and_wrap_safe_deadline();
+    test_pairing_window_outlives_physical_press_window();
+    test_softap_deadline_requires_active_state_and_positive_window();
     test_failure_is_terminal();
     test_backend_recovery_is_bounded_and_starts_before_online();
     return 0;

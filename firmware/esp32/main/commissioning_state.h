@@ -26,6 +26,11 @@ typedef struct {
     bool session_consumed;
 } commissioning_context_t;
 
+enum {
+    /* Bounded SoftAP time starts after physical confirmation and AP startup. */
+    COMMISSIONING_PAIRING_WINDOW_MS = 5U * 60U * 1000U,
+};
+
 void commissioning_init(commissioning_context_t *context);
 bool commissioning_begin(
     commissioning_context_t *context,
@@ -33,6 +38,11 @@ bool commissioning_begin(
     uint32_t window_ms
 );
 bool commissioning_begin_backend_recovery(commissioning_context_t *context, uint32_t now_ms);
+bool commissioning_start_softap_window(
+    commissioning_context_t *context,
+    uint32_t now_ms,
+    uint32_t window_ms
+);
 bool commissioning_accept_physical(commissioning_context_t *context, uint32_t now_ms);
 bool commissioning_transition(commissioning_context_t *context, commissioning_state_t next);
 bool commissioning_consume_session(commissioning_context_t *context);

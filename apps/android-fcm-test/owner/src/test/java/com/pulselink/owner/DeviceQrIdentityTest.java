@@ -22,4 +22,10 @@ public final class DeviceQrIdentityTest {
         assertEquals("PulseLink-89AB", DeviceQrIdentity.softApSsid("pl-0123456789ab"));
         assertNull(DeviceQrIdentity.softApSsid("clx1234567890abcdefghijk"));
     }
+
+    @Test public void claimAcceptsScannedOrManuallyEnteredPublicId() {
+        assertEquals("pl-0123456789ab", DeviceQrIdentity.claimCandidate("pl-0123456789ab", ""));
+        assertEquals("pl-0123456789ab", DeviceQrIdentity.claimCandidate(null, "pl-0123456789ab"));
+        assertNull(DeviceQrIdentity.claimCandidate(null, "invalid"));
+    }
 }

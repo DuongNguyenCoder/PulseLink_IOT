@@ -19,13 +19,21 @@ void physical_confirmation_init(physical_confirmation_t *confirmation) {
 }
 
 bool physical_confirmation_start(physical_confirmation_t *confirmation, uint32_t now_ms) {
+    return physical_confirmation_start_level(confirmation, false, now_ms);
+}
+
+bool physical_confirmation_start_level(
+    physical_confirmation_t *confirmation,
+    bool pressed_at_start,
+    uint32_t now_ms
+) {
     if (confirmation == NULL || confirmation->state != PHYSICAL_CONFIRMATION_IDLE) return false;
     confirmation->state = PHYSICAL_CONFIRMATION_WAITING;
     confirmation->started_at_ms = now_ms;
     confirmation->raw_changed_at_ms = now_ms;
     confirmation->press_started_at_ms = 0U;
-    confirmation->raw_pressed = false;
-    confirmation->stable_pressed = false;
+    confirmation->raw_pressed = pressed_at_start;
+    confirmation->stable_pressed = pressed_at_start;
     confirmation->press_in_progress = false;
     confirmation->consumed = false;
     return true;
@@ -78,7 +86,7 @@ void physical_confirmation_sample_level(
     int level,
     uint32_t now_ms
 ) {
-    // The verified wiring is button-to-GND; the adapter therefore treats low as pressed.
+    // The firmware assumes active-low wiring; the carrier-board wiring is not verified here.
     physical_confirmation_sample(confirmation, level == 0, now_ms);
 }
 

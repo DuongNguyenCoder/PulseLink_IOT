@@ -62,21 +62,24 @@ config PULSELINK_STATUS_LED_GPIO
         Do not select a GPIO until the actual carrier-board schematic is confirmed.
 
 config PULSELINK_COMMISSIONING_ENABLED
-    bool "Enable physical commissioning gate (not yet implemented)"
+    bool "Enable button-gated SoftAP commissioning"
     default n
     select MBEDTLS_HKDF_C
     help
-        Keep disabled until the SoftAP protocol, trust bootstrap and board
-        verification are complete. This option does not enable SoftAP by itself.
+        Enables the physical-confirmation gate, SoftAP transport and commissioning
+        lifecycle when the selected build profile also enables identity and
+        operational credential providers. It does not protect NVS contents at
+        rest or verify carrier-board button wiring. Keep disabled in profiles
+        that do not provide the required runtime dependencies.
 
 config PULSELINK_COMMISSIONING_BUTTON_GPIO
     int "Commissioning button GPIO"
     range -1 48
-    default 4
+    default 5
     help
-        The approved MVP board configuration uses GPIO4. Firmware samples it
-        active-low with the internal pull-up; verify actual carrier wiring before
-        flashing or applying electrical assumptions to an unverified board.
+        The MVP source configuration assigns GPIO5, separate from the GPIO4
+        event button. Firmware samples it active-low with the internal pull-up.
+        Verify carrier-board wiring and peripheral use before hardware operation.
 
 config PULSELINK_DEVICE_IDENTITY_NVS_PROVIDER
     bool "Enable NVS device identity provider (private key is extractable without flash protection)"

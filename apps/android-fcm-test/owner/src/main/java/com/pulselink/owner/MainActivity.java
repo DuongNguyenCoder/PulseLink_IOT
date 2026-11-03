@@ -62,10 +62,11 @@ public final class MainActivity extends Activity {
         root.addView(label("Devices")); devices = label("No devices loaded"); root.addView(devices);
         deviceName = input("Device display name"); root.addView(deviceName);
         root.addView(button("Refresh Devices", v -> loadDevices()));
-        deviceId = input("Enrolled Device ID"); root.addView(deviceId);
+        deviceId = input("Public Device ID from QR (or enter it manually)"); root.addView(deviceId);
         root.addView(button("Scan Device QR", v -> scanDeviceQr()));
         root.addView(label("QR contains Device identity only. Backend Store authorization and enrollment are checked separately."));
-        root.addView(button("Claim scanned Device and prepare Wi-Fi", v -> claimScannedDevice()));
+        root.addView(label("GPIO4 sends a Device Event. GPIO5 opens commissioning without erasing identity or credentials: on a new/unprovisioned board, hold for 1.5 seconds then release within the confirmation window; on an already provisioned board, reboot and do the same within 30 seconds after the recovery gate starts (after Wi-Fi initialization) to request reconfiguration. SoftAP lasts up to 5 minutes after it opens."));
+        root.addView(button("Claim Device and prepare Wi-Fi", v -> claimScannedDevice()));
         root.addView(button("Create provisioning session", v -> createProvisioningSession()));
         softApSsid = input("Device SoftAP SSID (for example PulseLink-XXXX)"); root.addView(softApSsid);
         wifiSsid = input("Test Wi-Fi SSID"); root.addView(wifiSsid);
@@ -200,12 +201,13 @@ public final class MainActivity extends Activity {
     }
 
     private void claimScannedDevice() {
-        final String candidateId = pendingDeviceClaimId;
+        final String candidateId = DeviceQrIdentity.claimCandidate(
+                pendingDeviceClaimId, deviceId.getText().toString().trim());
         final String selectedStore = storeId.getText().toString().trim();
         String wifiPermission = Build.VERSION.SDK_INT >= 33
                 ? Manifest.permission.NEARBY_WIFI_DEVICES : Manifest.permission.ACCESS_FINE_LOCATION;
         if (candidateId == null || selectedStore.isBlank()) {
-            status.setText("Scan an unassigned Device QR and select a Store first");
+            status.setText("Enter or scan an unassigned public Device ID and select a Store first");
             return;
         }
         if (Build.VERSION.SDK_INT >= 29 && checkSelfPermission(wifiPermission) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
@@ -218,6 +220,7 @@ public final class MainActivity extends Activity {
         final String displayName = name;
         status.setText("Requesting Store-authorized Device claim…");
         executor.execute(() -> {
+            String stage = "api";
             try {
                 JSONObject claimData = api().createDeviceClaimSession(requireAccess(), selectedStore, candidateId, displayName).getJSONObject("data");
                 if (claimData.optBoolean("alreadyClaimed")) {
@@ -231,11 +234,15 @@ public final class MainActivity extends Activity {
                     return;
                 }
                 JSONObject claimSession = claimData.getJSONObject("session");
+                if (claimSession.optString("id").isBlank() || claimData.optString("challenge").isBlank()) {
+                    throw new IllegalStateException("Claim response missing required fields");
+                }
                 String ssid = DeviceQrIdentity.softApSsid(candidateId);
                 if (ssid == null) throw new IllegalStateException("Device QR identity is not supported by this firmware profile");
                 runOnUiThread(() -> status.setText("Connect to the Device SoftAP to verify its first-claim proof…"));
                 if (softApConnection != null) softApConnection.close();
                 softApConnection = new SoftApConnection(this);
+                stage = "softap";
                 softApConnection.connect(ssid, new SoftApConnection.Listener() {
                     @Override public void onAvailable(Network network) {
                         executor.execute(() -> finishDeviceClaim(selectedStore, candidateId, claimData, claimSession));
@@ -251,7 +258,8 @@ public final class MainActivity extends Activity {
                 });
             } catch (Exception failure) {
                 pendingDeviceClaimId = candidateId;
-                postStatus("Device claim could not start. Check Store authorization, Device state and network, then retry.");
+                String userMessage = ClaimStartFailure.describe(stage, failure);
+                postStatus(userMessage);
             }
         });
     }

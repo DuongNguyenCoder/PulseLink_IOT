@@ -77,6 +77,7 @@ export const ModelName = {
     AccountToken: 'AccountToken',
     Device: 'Device',
     ProvisioningSession: 'ProvisioningSession',
+    DeviceClaimSession: 'DeviceClaimSession',
     DeviceEvent: 'DeviceEvent',
     Staff: 'Staff',
     StaffPushToken: 'StaffPushToken',
@@ -222,6 +223,17 @@ export const ProvisioningSessionScalarFieldEnum = {
     lastAttemptAt: 'lastAttemptAt',
     createdAt: 'createdAt',
     updatedAt: 'updatedAt'
+};
+export const DeviceClaimSessionScalarFieldEnum = {
+    id: 'id',
+    deviceId: 'deviceId',
+    storeId: 'storeId',
+    actorAccountId: 'actorAccountId',
+    name: 'name',
+    challengeHash: 'challengeHash',
+    expiresAt: 'expiresAt',
+    consumedAt: 'consumedAt',
+    createdAt: 'createdAt'
 };
 export const DeviceEventScalarFieldEnum = {
     id: 'id',

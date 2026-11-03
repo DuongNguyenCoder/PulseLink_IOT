@@ -30,6 +30,11 @@ enum {
 
 void physical_confirmation_init(physical_confirmation_t *confirmation);
 bool physical_confirmation_start(physical_confirmation_t *confirmation, uint32_t now_ms);
+bool physical_confirmation_start_level(
+    physical_confirmation_t *confirmation,
+    bool pressed_at_start,
+    uint32_t now_ms
+);
 void physical_confirmation_cancel(physical_confirmation_t *confirmation);
 void physical_confirmation_sample(
     physical_confirmation_t *confirmation,

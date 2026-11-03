@@ -43,6 +43,19 @@ bool commissioning_begin_backend_recovery(commissioning_context_t *context, uint
     return true;
 }
 
+bool commissioning_start_softap_window(
+    commissioning_context_t *context,
+    uint32_t now_ms,
+    uint32_t window_ms
+) {
+    if (context == NULL || context->state != COMMISSIONING_SOFTAP_ACTIVE || window_ms == 0U) {
+        return false;
+    }
+    context->started_at_ms = now_ms;
+    context->deadline_at_ms = now_ms + window_ms;
+    return true;
+}
+
 bool commissioning_expire_if_needed(commissioning_context_t *context, uint32_t now_ms) {
     if (context == NULL || terminal(context->state)) return false;
     if (!elapsed(now_ms, context->started_at_ms, (uint32_t)(context->deadline_at_ms - context->started_at_ms))) {

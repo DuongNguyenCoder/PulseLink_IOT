@@ -26,6 +26,11 @@ final class DeviceQrIdentity {
         return DEVICE_ID.matcher(value).matches() ? value : null;
     }
 
+    static String claimCandidate(String scannedId, String enteredId) {
+        String scanned = parse(scannedId);
+        return scanned != null ? scanned : parse(enteredId);
+    }
+
     static String softApSsid(String deviceId) {
         String parsed = parse(deviceId);
         if (parsed == null || !parsed.startsWith("pl-") || parsed.length() != 15) return null;

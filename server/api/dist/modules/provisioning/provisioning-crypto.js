@@ -49,6 +49,46 @@ export function isSupportedEnrollmentPublicKey(publicKeySpkiBase64) {
         return false;
     }
 }
+export function canonicalDeviceClaimPayload(input) {
+    return Buffer.from([
+        'pulselink-device-claim-v1',
+        input.deviceId,
+        input.storeId,
+        input.claimSessionId,
+        String(input.proof.keyVersion),
+        input.proof.publicKeySpkiBase64,
+        input.proof.challenge,
+        String(input.proof.expiresAt),
+    ].join('\n'), 'utf8');
+}
+export function verifyDeviceClaimProof(input) {
+    try {
+        const { proof } = input;
+        const challengeBytes = Buffer.from(proof.challenge, 'base64url');
+        const signature = Buffer.from(proof.signatureDerBase64, 'base64');
+        const expiresAt = new Date(proof.expiresAt * 1000);
+        const now = input.now ?? new Date();
+        if (!Number.isSafeInteger(proof.keyVersion) || proof.keyVersion < 1 ||
+            !Number.isSafeInteger(proof.expiresAt) ||
+            challengeBytes.length !== 32 || challengeBytes.toString('base64url') !== proof.challenge ||
+            signature.length < 8 || signature.length > 80 ||
+            signature.toString('base64') !== proof.signatureDerBase64 ||
+            !Number.isFinite(expiresAt.getTime()) || expiresAt.getTime() <= now.getTime() ||
+            expiresAt.getTime() > now.getTime() + 5 * 60_000 ||
+            !isSupportedEnrollmentPublicKey(proof.publicKeySpkiBase64))
+            return false;
+        const publicKey = createPublicKey({ key: Buffer.from(proof.publicKeySpkiBase64, 'base64'), format: 'der', type: 'spki' });
+        return verify('sha256', canonicalDeviceClaimPayload({
+            deviceId: input.deviceId,
+            storeId: input.storeId,
+            claimSessionId: input.claimSessionId,
+            proof,
+        }), { key: publicKey, dsaEncoding: 'der' }, signature);
+    }
+    catch {
+        return false;
+    }
+}
 export function canonicalDeviceEnrollmentPayload(input) {
     return Buffer.from([
         'pulselink-device-enrollment-v1',

@@ -6,6 +6,7 @@
 
 #include "cJSON.h"
 #include "commissioning_protocol.h"
+#include "commissioning_http_response_policy.h"
 #include "device_provisioning_payload.h"
 #include "esp_crt_bundle.h"
 #include "esp_http_client.h"
@@ -133,6 +134,9 @@ commissioning_redeem_result_t commissioning_redeem_and_store(
     clear_bytes(serialized, strlen(serialized));
     cJSON_free(serialized);
     clear_bytes(signature, sizeof(signature)); clear_bytes(signature_base64, sizeof(signature_base64));
+    if (commissioning_http_status_is_permanent_rejection(status)) {
+        return map_status(status);
+    }
     if (request_result != ESP_OK) return COMMISSIONING_REDEEM_RETRYABLE;
     if (status < 200 || status >= 300) return map_status(status);
     cJSON *response_root = cJSON_ParseWithLength(response.body, response.length);

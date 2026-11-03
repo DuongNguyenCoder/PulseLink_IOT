@@ -1992,3 +1992,689 @@ connection strings are intentionally excluded.
 - No account/API writes, database access, real FCM send, serial open or board
   operation occurred after the original RUN-040 entry. This addendum corrects
   the install-state detail without changing prior run history.
+
+### WP14-RUN-040 append-only staging flash verification addendum
+
+- Time: 2026-10-29 12:48 +07:00 (Asia/Saigon). HEAD at continuation:
+  `02aed7aa9427086e5a42242ae58745ce6f31cea4`, branch `main`; the pre-existing
+  worktree contained only the staging flash-size configuration and build-doc
+  changes. No reset/clean/checkout was performed.
+- Goal: verify and, within the earlier hardware authorization, deploy the
+  staging image to the attached ESP32-S3 while preserving NVS and eFuses.
+- Fresh board evidence: read-only `esptool flash_id` identified ESP32-S3
+  QFN56 rev 0.2, 8 MiB PSRAM, and 16 MiB flash. The output's hardware address
+  is intentionally omitted. Because the profile was configured for a 2 MiB
+  flash header, updated `firmware/esp32/sdkconfig.staging.defaults` to select
+  the 16 MiB flash header and updated `docs/development/firmware-build.md`.
+  No partition offsets/layout or security settings were changed.
+- Fresh firmware build: isolated ESP-IDF 5.5.5 staging `fullclean set-target
+  esp32s3 build` completed with exit 0 (single Ninja job). Image is
+  `firmware/esp32/build/staging/pulselink_firmware.bin`, 965,760 bytes
+  (`0xebc80`); app partition remains `0x100000`, leaving `0x14380` bytes
+  (about 8%). The flash argument now specifies 16 MiB.
+- Flash command outcome: the elevated `idf.py flash` launch completed, but its
+  large output was not retained by the tool result, so its own exit code is
+  unavailable. Fresh read-back verification provides direct evidence instead:
+  `python -m esptool --chip esp32s3 --port COM4 --baud 115200 --before
+  default_reset --after hard_reset verify_flash 0x0
+  build/staging/bootloader/bootloader.bin 0x8000
+  build/staging/partition_table/partition-table.bin 0x10000
+  build/staging/pulselink_firmware.bin` exited 0; bootloader (0x5160 bytes),
+  partition table (0xc00 bytes), and app (0xebc80 bytes) each reported
+  `verify OK (digest matched)`. This confirms those artifacts are on flash.
+  The esptool hard-reset the board via RTS after verification.
+- An attempted `idf.py ... verify-flash` exited 1 because ESP-IDF 5.5.5 has no
+  such idf.py/Ninja target; it did not access the serial port or write flash.
+  Replaced it with the documented esptool `verify_flash` command above.
+- Physical scope: no full-chip erase, NVS write/erase, eFuse write, flash
+  security change, account/store/device API write, database operation or FCM/
+  email send occurred. Flash verification does **not** prove boot/runtime,
+  SoftAP, Wi-Fi association, redemption, ONLINE, Device Event, push receipt or
+  reboot persistence. Ordinary NVS still exposes identity and token material
+  to raw-flash extraction.
+- `NOTIFICATION_RECIPIENT_MODE=account` is reported by the Owner as configured
+  on staging; this run did not inspect remote runtime configuration or send a
+  push. Server-side FCM credentials and worker delivery remain unverified.
+- Final status: `PARTIALLY COMPLETED — STAGING IMAGE READ-BACK VERIFIED;
+  COMMISSIONING/NOTIFICATION E2E NOT VERIFIED`. Next: confirm/install the final
+  Owner APK on the phone (the user's prior install-update prompt was canceled),
+  sign in with a verified test account, claim the board in a test Store,
+  perform the physical-button SoftAP flow with test Wi-Fi, then verify ONLINE,
+  a GPIO4 event commit/ACK and push receipt. Reboot recovery and NVS exposure
+  remain explicit acceptance checks/limitations.
+
+## WP14-RUN-041 — Owner claim usability and SoftAP commissioning window
+
+- Time: 2026-10-29 13:13 +07:00 (Asia/Saigon).
+- Git: HEAD `02aed7aa9427086e5a42242ae58745ce6f31cea4`, branch `main`.
+  At start, worktree contained the two RUN-040 staging-profile changes. Those
+  were preserved; no reset/clean/checkout was run.
+- Goal: resolve the Owner-to-board linking/setup friction reported during real
+  app use, verify the relevant implementation, and deploy the fix to the same
+  previously identified COM4 ESP32-S3.
+- Source finding: the app's Claim button previously required a Device ID
+  obtained only by QR scan, although the board had no confirmed printed QR.
+  Firmware also used the physical-confirmation 30-second timeout as the whole
+  commissioning lifecycle deadline, so the SoftAP could close while the app
+  was creating the claim session, accepting Android's Wi-Fi prompt and fetching
+  board proof.
+- Files changed:
+  - `firmware/esp32/main/commissioning_state.h`: named bounded five-minute
+    pairing lifecycle window.
+  - `firmware/esp32/main/main.c`: keep GPIO4 physical confirmation bounded by
+    its existing 30-second gate, but let the opened SoftAP/lifecycle remain
+    available for up to five minutes from commissioning start.
+  - `firmware/esp32/tests/commissioning_state_test.c`: regression coverage for
+    SoftAP surviving the first 30 seconds but expiring at the five-minute cap.
+  - Owner `DeviceQrIdentity.java`, `MainActivity.java`, and
+    `DeviceQrIdentityTest.java`: allow typing a public Device ID when there is
+    no QR label; retain QR parsing, Store authorization and live board
+    signature proof. Added visible button/SoftAP timing instructions.
+  - `docs/development/firmware-build.md`: document the physical gate, pairing
+    window and Owner claim/configuration steps.
+  - This log and `docs/audits/wp14-9-end-to-end-commissioning-report.md`.
+- Fresh commands/results:
+  - Docker host suite:
+    `docker run --rm --network none --read-only --tmpfs
+    /tmp:rw,exec,nosuid,size=128m --mount type=bind,src=D:/project-PulseLink,
+    dst=/src,readonly --workdir /src/firmware/esp32 gcc:13.2.0-bookworm sh
+    tests/run_host_tests.sh`: **PASS**, exit 0; 10 runners passed, 0 failed,
+    0 skipped.
+  - Android initial sandbox invocation failed before Gradle due access denied
+    on the existing wrapper lock; elevated rerun
+    `.\gradlew.bat :owner:testDebugUnitTest :owner:assembleDebug --rerun-tasks`
+    **PASS**, exit 0; 21 tests, 0 failures/errors, 0 skipped. APK:
+    `apps/android-fcm-test/owner/build/outputs/apk/debug/owner-debug.apk`,
+    3,966,318 bytes.
+  - ESP-IDF initial sandbox invocation failed before compilation with
+    `WinError 5` when creating Ninja pipes; elevated ESP-IDF 5.5.5 single-job
+    staging build **PASS**, exit 0. App image `0xebc90` bytes; partition
+    `0x100000`; free `0x14370` bytes (~8%).
+  - `esptool write_flash` to COM4, restricted to bootloader at `0x0`, partition
+    table at `0x8000`, and app at `0x10000`: **PASS**, exit 0; each region's
+    write hash verified. NVS region was not included; no whole-chip erase.
+  - `esptool verify_flash` for those same three artifacts: **PASS**, exit 0;
+    all three reported digest match. esptool reset the board through RTS.
+  - `adb install -r .../owner-debug.apk`: **PASS**, `Success`.
+    `adb shell monkey -p com.pulselink.owner 1`: **PASS**, one launch event
+    injected; `pm path` confirmed the package installed.
+  - `git diff --check`: **PASS**, exit 0; Git emitted only LF/CRLF advisories.
+- Fresh vs historical: build, host tests, Android tests/APK, physical flash
+  write/read-back and APK install/launch above are fresh RUN-041 evidence.
+  The user reports SignUp, SignIn and Store creation already work in actual
+  app use; that is user-reported runtime evidence, not independently observed
+  in this run. No Device claim/proof, SoftAP association, Wi-Fi credential
+  transfer, station IP, redemption, authenticated ONLINE, Device Event, ACK,
+  push receipt or reboot recovery was exercised.
+- Failures and resolution: the non-elevated Gradle and Ninja subprocess
+  launches were denied by Windows before running tests/compilation; elevated
+  reruns succeeded. No tests were skipped or weakened.
+- Security/side effects: the entered Device ID is public identity only; Store
+  authorization and board PoP remain mandatory. The five-minute timer bounds
+  an already physically opened pairing window; GPIO4 still must be held for
+  1.5 seconds within 30 seconds after boot. No staging business API, DB,
+  notification, email, eFuse, security-fuse or NVS operation was performed.
+  Flash wrote only the verified bootloader/partition/app ranges. Ordinary NVS
+  identity/token data remains extractable at rest.
+- Open blockers/next actions:
+  1. Use the installed Owner APK, staging API origin, and target Store ID.
+     Enter the board's public Device ID (or scan a QR with that same value).
+  2. Power-cycle the board; within the first 30 seconds hold GPIO4 for at
+     least 1.5 seconds, then release. Confirm the `PulseLink-XXXX` SoftAP and
+     accept Android's connection prompt while the five-minute window is open.
+  3. Tap Claim Device; backend must confirm proof before it is Store-linked.
+     If it is already linked to this Store, tap Create provisioning session.
+     If linked elsewhere, a transfer is not supported by this claim flow.
+  4. Enter the test 2.4-GHz Wi-Fi in app and send the encrypted configuration;
+     verify backend ONLINE, press GPIO4 for an Event and confirm commit/ACK and
+     FCM delivery. Remote FCM worker/sender configuration remains unverified.
+- Result: `PARTIALLY COMPLETED — CLAIM/PAIRING FIX BUILT AND DEPLOYED;
+  STORE LINK, WI-FI AND EVENT/PUSH E2E NOT YET VERIFIED`.
+
+### WP14-RUN-041 side-effect accounting correction
+
+- On review, launching `MainActivity` calls `restoreSession()`, which may
+  asynchronously register the saved FCM installation token through the
+  existing authenticated `POST /v1/installations/` contract when a session is
+  present. The network response was not captured, so this run cannot assert
+  that no staging write occurred. No sign-up, Store creation, Device claim,
+  provisioning, button Event or FCM message send was intentionally triggered.
+  This supersedes the broad “no staging business API” wording above; no source
+  or test result is affected.
+
+## WP14-RUN-042 — Independent RUN-041 GPIO4 and E2E readiness audit
+
+- Time: 2026-10-29 13:38 +07:00 (Asia/Saigon).
+- Git: HEAD `02aed7aa9427086e5a42242ae58745ce6f31cea4`, branch `main`.
+  Worktree was dirty at start with RUN-040/041 source, config and docs edits;
+  all were preserved. RUN-042 changed the WP14.9 summary, this log, the new
+  independent audit report and `docs/.gitignore` to unignore that report (new
+  files in this directory are otherwise excluded by default).
+- Goal: independently verify RUN-041 claims, especially whether the GPIO4
+  long-press commissioning instruction conflicts with ordinary button Events;
+  do not perform physical commissioning or staging writes.
+- Source review: `main.c`, `physical_confirmation.c/.h`,
+  `commissioning_state.h`, Kconfig/staging defaults, Owner `MainActivity`,
+  `ApiClient`, `SoftApConnection`, backend claim/status/event services/routes,
+  relevant tests and RUN-041 report/log.
+- Finding (high confidence from source/config): staging sets both
+  `CONFIG_PULSELINK_COMMISSIONING_BUTTON_GPIO=4` and
+  `CONFIG_PULSELINK_BUTTON_GPIO=4`. Both are input/pull-up configurations;
+  source interprets low as pressed. Ordinary `button_task()` enqueues and
+  persists a Device Event after 50 ms stable press, without checking
+  commissioning state. The sender waits until `COMMISSIONING_ONLINE`, but
+  does not remove the pending Event. Physical confirmation accepts only after
+  debounced release following a hold of at least 1.5 seconds. Therefore the
+  recommended commissioning gesture can enqueue a normal Event which may be
+  delivered after ONLINE. No arbitration or suppression exists. The physical
+  board wiring is not independently proven; a source comment says button to
+  GND is verified, but this audit found no schematic/runtime evidence.
+- Timing: physical-confirmation and five-minute pairing deadlines both begin
+  when `commissioning_gate_task()` starts after `wifi_start()`. The five-minute
+  lifecycle deadline is not restarted on button press; the press window is
+  30 seconds from gate-task start. Exact timing from physical boot is not
+  runtime verified.
+- Fresh commands/results:
+  - Read-only source/config/status/diff review and artifact hash calculations:
+    completed; no hardware port was opened.
+  - Docker C host suite:
+    `docker run --rm --network none --read-only --tmpfs
+    /tmp:rw,exec,nosuid,size=128m --mount type=bind,src=D:/project-PulseLink,
+    dst=/src,readonly --workdir /src/firmware/esp32
+    gcc:13.2.0-bookworm sh tests/run_host_tests.sh` — **PASS**, exit 0;
+    10 runners passed, 0 failed, 0 skipped.
+  - Android:
+    `./gradlew.bat :owner:testDebugUnitTest :owner:assembleDebug
+    --rerun-tasks` — **PASS**, exit 0; 21 tests, 0 failures/errors/skipped;
+    41 actionable Gradle tasks; APK 3,966,318 bytes.
+  - ESP-IDF 5.5.5 ESP32-S3 staging profile, single-job build — **PASS**,
+    exit 0; app image `0xebc90` (965,776 bytes), app partition `0x100000`,
+    free `0x14370` (82,800 bytes, ~7.9%). Current local app SHA-256 is
+    `B02CD0146058D00F974DF9C177D6AB00F28ADF5BD0AB1793DAB71A6FF77F68F4`.
+  - Focused backend:
+    `npm test -- --run src/modules/provisioning src/modules/device-status
+    src/modules/device-events` — initial sandbox attempt failed before test
+    load (`spawn EPERM`); elevated retry **PASS**, exit 0; 10 files, 48 tests
+    passed. No PostgreSQL/staging API request.
+  - `git diff --check` — **PASS**, exit 0; only LF/CRLF advisories.
+- Artifact/flash evidence: current local bootloader, partition and app hashes
+  were computed and recorded in the independent report. Historical RUN-041 log
+  reports successful `write_flash` and `verify_flash` with digest match for
+  bootloader, partition and app at offsets 0x0/0x8000/0x10000. RUN-042 did not
+  flash or read the board; no separate retained readback image/hash allows an
+  independent board-to-current-artifact comparison. Thus RUN-041 tool-reported
+  flash/readback remains historical, not fresh runtime evidence.
+- Android/backend contract review: public Device ID/QR is not proof;
+  authenticated OWNER claim plus board proof is required. Same-Store claimed
+  device may continue through separate provisioning-session action; cross-Store
+  transfer is rejected. Android uses Android 10+ `WifiNetworkSpecifier` and
+  expected `PulseLink-XXXX` SSID as discovery only. Backend status is
+  bearer-authenticated and read-only; authenticated Event transaction updates
+  backend ONLINE/last-seen and creates notification intent before ACK. No
+  contract request was sent in RUN-042.
+- Failures: backend test sandbox launch was blocked with `spawn EPERM`; elevated
+  retry ran successfully. `git diff --check` emitted expected line-ending
+  advisories, with exit 0. No tests were weakened.
+- Security/side effects: no COM4/serial access, flash/reset/erase, eFuse or
+  security configuration change, claim, Wi-Fi transfer, provisioning session,
+  Device Event, API call, database write, notification, FCM or email. Ordinary
+  NVS is configured and `CONFIG_NVS_ENCRYPTION=n`; no at-rest protection is
+  claimed. Secrets were not recorded.
+- Open blockers/next actions:
+  1. Do not use GPIO4 for commissioning until an approved/verified separate
+     input is available or reviewed software arbitration suppresses the press
+     Event at enqueue time. Sender-only gating is insufficient.
+  2. Verify carrier-board GPIO4 wiring from schematic/revision evidence.
+  3. Add host tests for short press, commissioning long press, release,
+     cancellation/expiry, boot-held input, debounce and queue contents when
+     the behavior change is approved; rerun host suite/build.
+  4. Separately authorize a safe board identification/readback procedure before
+     physical E2E; current RUN-041 flash report is historical.
+  5. Then verify actual Owner claim, SoftAP, Wi-Fi, redemption, authenticated
+     status, Event commit/ACK, notification and reboot recovery without logging
+     credentials.
+- Files changed in RUN-042: `docs/audits/wp14-10-run-041-independent-audit.md`
+  (new audit); `docs/audits/wp14-9-end-to-end-commissioning-report.md`
+  (current summary supersession); `docs/audits/wp14-engineering-log.md`
+  (this append-only entry); `docs/.gitignore` (allowlist only this requested
+  audit report).
+- Result: `PARTIALLY COMPLETED`; GPIO4 physical commissioning action is
+  `BLOCKED`; physical E2E is `NOT VERIFIED`.
+
+## WP14-RUN-043 — GPIO4/GPIO5 button separation and commissioning validation
+
+- Time: 2026-10-29 14:04 +07:00 (Asia/Saigon).
+- Git: HEAD `02aed7aa9427086e5a42242ae58745ce6f31cea4`, branch `main`.
+  Worktree was already dirty with prior RUN-040/041/042 changes. All were
+  preserved. No staging DB/API action or board write was performed.
+- Goal: remove Event/commissioning button conflict using approved GPIO4 Event
+  and GPIO5 commissioning mapping; add deterministic regression tests; validate
+  software/build and assess safe physical E2E readiness.
+- Files changed:
+  - `firmware/esp32/main/event_button.c/.h`: isolated Event-button debounce
+    state and GPIO assignment validation.
+  - `firmware/esp32/main/physical_confirmation.c/.h`: initialize from current
+    input level and document active-low as an assumption, not proven wiring.
+  - `firmware/esp32/main/main.c`: use distinct inputs, add compile/runtime
+    duplicate guards and prevent held-at-gate-start input from confirming.
+  - `firmware/esp32/main/CMakeLists.txt`, `Kconfig.projbuild`,
+    `firmware/esp32/sdkconfig.staging.defaults`: register module and assign
+    Event=GPIO4, Commissioning=GPIO5.
+  - `firmware/esp32/tests/event_button_test.c`, `tests/run_host_tests.sh`:
+    add 11 deterministic assertions/cases and runner; update total runners 10→11.
+  - Owner `MainActivity.java`: distinguish physical buttons in commissioning
+    prompt.
+  - `docs/development/firmware-build.md`: correct button/deadline guidance and
+    state physical wiring caveat.
+  - `docs/.gitignore`: allowlist requested RUN-043 report.
+  - WP14.9 summary, this append-only log and
+    `wp14-11-gpio-arbitration-and-e2e-report.md`.
+- GPIO/source review: repository search found no existing GPIO5 peripheral
+  mapping in firmware or a board schematic. Effective isolated staging
+  sdkconfig confirms Event GPIO4 and Commissioning GPIO5. Both are configured
+  active-low inputs with pull-up by firmware. No source-level fixed SPI/UART/
+  I2C/JTAG/LED use of GPIO5 was found. Carrier schematic, GPIO exposure and
+  actual wiring remain unverified. COM4 enumerated, but no serial device was
+  opened and no VID/PID/board identity was established.
+- Fresh commands/results:
+  - Initial sandbox Docker host invocation: **FAIL/BLOCKED**, exit 1 before
+    suite start, Docker Desktop engine pipe access denied.
+  - First elevated host suite: reached tests; **FAIL**, exit 1 at expiry test
+    assertion because the harness had not invoked the separate lifecycle
+    expiry transition. Test harness was corrected to mirror production.
+  - Second elevated host suite: all 11 runners printed PASS, then **FAIL**,
+    exit 1 because runner total still expected 10. Count corrected to 11.
+  - Final Docker host suite command:
+    `docker run --rm --network none --read-only --tmpfs
+    /tmp:rw,exec,nosuid,size=128m --mount type=bind,src=D:/project-PulseLink,
+    dst=/src,readonly --workdir /src/firmware/esp32
+    gcc:13.2.0-bookworm sh tests/run_host_tests.sh` — **PASS**, exit 0;
+    11 runners passed, 0 failed, 0 skipped.
+  - Initial ESP-IDF invocation failed before CMake because CMake was absent from
+    PATH. Retry with CMake/Ninja discovered locally failed before compilation
+    because Windows subprocess pipe access was denied; elevated run used the
+    old persisted staging sdkconfig and the new compile guard correctly failed
+    because that generated config still assigned both functions to GPIO4.
+    Existing build/sdkconfig was preserved.
+  - First isolated staging build failed because the installed Xtensa toolchain
+    was not in PATH. Corrected ESP-IDF 5.5.5 command used the installed IDF
+    Python environment, CMake 3.30.2, Ninja 1.12.1, Xtensa GCC 14.2.0, one
+    Ninja job, build dir `build/staging-run043`, and explicit defaults
+    `sdkconfig.defaults;sdkconfig.commissioning-mvp.defaults;sdkconfig.staging.defaults`:
+    **PASS**, exit 0, target `esp32s3`. Non-fatal `ESP_ROM_ELF_DIR` gdbinit
+    warning observed. Image `0xebdd0` / 966,096 bytes; partition `0x100000`,
+    free `0x14230` / 82,480 bytes (~7.9%). Firmware SHA-256
+    `992E372B00811E4A1165F8E8E61485AFE5776CCF1CD351673D222531A2359E31`.
+  - Android initial Gradle call failed before tests due wrapper-lock access
+    denied. Elevated `.\gradlew.bat :owner:testDebugUnitTest
+    :owner:assembleDebug --rerun-tasks` — **PASS**, exit 0; 41 tasks executed,
+    21 tests passed, 0 failed/errors/skipped. APK
+    `apps/android-fcm-test/owner/build/outputs/apk/debug/owner-debug.apk`,
+    3,966,318 bytes, SHA-256
+    `5F77B5D6B2429508DF8ADB178F1C43485A7CBF63A7ACD82B80391AD5F935D6C7`.
+  - Backend sandbox test invocation failed before startup with `spawn EPERM`.
+    Elevated `npm test -- --run src/modules/provisioning src/modules/device-status
+    src/modules/device-events` — **PASS**, exit 0; 10 files, 48 tests passed.
+    Backend source unchanged; no typecheck/build/full suite or PostgreSQL
+    integration rerun.
+  - COM enumeration `[System.IO.Ports.SerialPort]::GetPortNames()` returned
+    `COM4`; follow-up PnP query yielded no board identity and exit 1. No port
+    open/serial I/O occurred.
+  - Final `git diff --check`: **PASS**, exit 0; only LF/CRLF advisories.
+- Behavioral checks: Event button presses enqueue from GPIO4 state machine;
+  commissioning button is read only by physical-confirmation flow on GPIO5.
+  A GPIO5 held at gate startup is initialized as already pressed with no
+  eligible hold, and requires release/fresh press. Confirmation is accepted
+  on release after the existing 1.5-second threshold; confirmation window is
+  30 seconds from `commissioning_gate_task` startup. Five-minute lifecycle
+  deadline starts at that same task startup and is not restarted by button
+  press. Existing pending Event queue entries are never cleared.
+- Evidence boundaries: host tests cover deterministic logic, not real FreeRTOS
+  task scheduling/electrical bounce. Build verifies source/profile only. No
+  backend contract was changed. COM4 is listed but board revision/wiring are
+  not confirmed, so no flash or physical commissioning was safe to attempt.
+- Security/side effects: no production/staging DB writes, migrations, API
+  calls, claim/provisioning, Wi-Fi credential entry, Event, FCM/email, serial
+  open, flash/erase/reset, eFuse or security-mode change. Staging config keeps
+  ordinary NVS and `CONFIG_NVS_ENCRYPTION` disabled; identity/credential
+  extractability remains.
+- Open blockers/next actions:
+  1. Obtain board revision and schematic/pinout; verify GPIO5 is available and
+     physically connected as intended while GPIO4 remains the Event button.
+  2. Independently identify COM4 board and confirm recovery procedure before
+     any authorized flash/readback.
+  3. After physical pin evidence, install/launch the APK and run controlled
+     claim → SoftAP → Wi-Fi → redemption → authenticated ONLINE → GPIO4 Event/
+     ACK → notification/reboot recovery. Do not mark any physical gate PASS
+     based on this software run.
+  4. Protected-at-rest credential storage remains an explicit MVP limitation;
+     do not claim ordinary NVS is encrypted.
+- Files changed are listed in the RUN-043 report. Result:
+  `PARTIALLY_COMPLETED`; source/host/build/app/backend-focused checks pass,
+  GPIO5 electrical mapping and physical E2E are `NOT VERIFIED`.
+
+## WP14-RUN-044 — Staging firmware flash and Owner-to-Device test guide
+
+- Time: 2026-10-29 14:36 Asia/Saigon (UTC+07:00).
+- Git: HEAD `02aed7aa9427086e5a42242ae58745ce6f31cea4`, branch `main`.
+  Worktree was already dirty from RUN-043 and other pre-existing changes; no
+  reset/clean/checkout was performed. RUN-044 edits only the Kconfig help text,
+  this log, the WP14 summary, and the new operator guide.
+- Goal: build and flash the staging GPIO split to the identified ESP32-S3,
+  verify written regions, rerun host regression, and give the Owner a usable
+  Store/Device/Wi-Fi/Event test sequence.
+- Fresh target evidence: `pnputil /enum-devices /class Ports` identified COM4
+  as an Espressif USB VID `303A` / PID `1001` interface. `python -m esptool
+  --chip auto --port COM4 chip_id` exited 0 and identified ESP32-S3 QFN56 rev
+  v0.2, 8 MB PSRAM. This is chip identity evidence, not carrier-board revision
+  or GPIO wiring evidence. The read-only command reset the chip through RTS.
+- Fresh build: ESP-IDF 5.5.5, isolated `build/staging-run043`, target
+  `esp32s3`, defaults `sdkconfig.defaults;sdkconfig.staging.defaults`, using
+  CMake 3.30.2/Ninja 1.12.1/Xtensa GCC 14.2.0. A subsequent incremental build
+  after the Kconfig help correction exited 0. App `0xebdd0` / 966,096 bytes;
+  partition `0x100000`, free `0x14230` / 82,480 bytes (~7.9%). App SHA-256
+  `992E372B00811E4A1165F8E8E61485AFE5776CCF1CD351673D222531A2359E31`.
+- Flash command: `python -m esptool --chip esp32s3 --port COM4 --baud 460800
+  write_flash --flash_mode dio --flash_size 16MB --flash_freq 80m 0x0
+  build/staging-run043/bootloader/bootloader.bin 0x8000
+  build/staging-run043/partition_table/partition-table.bin 0x10000
+  build/staging-run043/pulselink_firmware.bin` exited 0. Esptool reported
+  digest verification success for all three writes. It erased only sectors
+  covered by those regions; no full-flash erase or NVS region write was run.
+  A separate `verify_flash` of all three offsets exited 0 and reported
+  `verify OK (digest matched)` for bootloader, partition table and app. Board
+  was hard-reset by RTS after flash and readback.
+- Fresh C host suite: sandbox Docker attempt exited 1 before suite startup
+  (`dockerDesktopLinuxEngine` access denied); elevated identical read-only,
+  network-disabled Docker invocation exited 0: 11 runners passed, 0 failed,
+  0 skipped (`physical`, `event-buttons`, `identity`, `lifecycle`,
+  `transcript`, `crypto-interoperability`, `credential-storage`,
+  `wifi-controller`, `backend-reachability`, `event-gate`,
+  `nvs-credential-provider`).
+- Android: fresh `adb devices -l` exited 0 but listed no device. Existing debug
+  APK was found at `apps/android-fcm-test/owner/build/outputs/apk/debug/owner-debug.apk`,
+  size 3,966,318 bytes, SHA-256
+  `5F77B5D6B2429508DF8ADB178F1C43485A7CBF63A7ACD82B80391AD5F935D6C7`.
+  APK was not rebuilt or installed in RUN-044; its test/build evidence remains
+  historical RUN-043 evidence.
+- E2E: no GPIO was pressed; no Wi-Fi configuration was sent; no claim or
+  provisioning session was created; no staging API, database, Device Event,
+  FCM/email delivery or notification was exercised. No serial monitor was
+  opened. App install/launch, Wi-Fi association, redemption, authenticated
+  ONLINE, Event ACK, notification and reboot recovery remain `NOT RUN`.
+- Security: GPIO4 remains Event, GPIO5 remains commissioning in the verified
+  staging build. Kconfig's stale “not yet implemented” label was corrected to
+  describe the implemented button-gated SoftAP path. This does not verify
+  carrier-board pads/wiring. Identity and operational credential remain in
+  ordinary NVS and extractable; no at-rest protection is claimed. No eFuse,
+  security mode, migration, production/staging DB write, or whole-flash erase.
+- Errors: initial `idf.py chip_id` used an unsupported action (exit 1); use
+  `esptool chip_id` instead (exit 0). First esptool attempt used unsupported
+  hyphenated spelling `chip-id` (exit 1), corrected to `chip_id`. Initial
+  PowerShell build command split semicolon-delimited defaults (exit 1); after
+  quoting it, sandbox Windows subprocess creation returned `WinError 5`; the
+  approved elevated build succeeded. Docker sandbox engine access was denied;
+  elevated read-only test run passed. These failures are retained here.
+- Files changed in RUN-044: `firmware/esp32/main/Kconfig.projbuild` (accurate
+  feature description), `docs/firmware/store-device-wifi-commissioning.md`
+  (operator procedure), `docs/audits/wp14-9-end-to-end-commissioning-report.md`
+  (current evidence), and this append-only log. Existing RUN-043 files were
+  preserved.
+- Next actions: install the APK after a phone appears in `adb devices`; sign
+  in, select the Store and use the public Device ID in the guide; commission
+  via GPIO5; send Wi-Fi; wait for the app's authenticated backend status; press
+  GPIO4 once when prompted for the first authenticated Event; verify the
+  notification and Device status; then perform an approved reboot/recovery
+  check. Confirm external GPIO4/GPIO5-to-GND wiring against the carrier board
+  before physical button use. The guide records the exact statuses and retry
+  guidance.
+- Result: `PARTIALLY COMPLETED`. Board chip identity, staging build, flash and
+  readback, and host logic are freshly verified; Owner-to-Device physical E2E
+  and notification delivery are not verified because no phone was attached
+  and no button/Wi-Fi/API test was performed.
+- Runtime branch clarification from source review: the commissioning gate task
+  starts only when startup does not take the retained station-config plus
+  operational-credential backend-recovery path. Since RUN-044 preserved NVS
+  and did not inspect runtime state, SoftAP availability on this board remains
+  unknown. If SoftAP is absent, GPIO5 cannot reopen it in the recovery path;
+  do not erase NVS. A non-destructive reconfiguration action is a remaining
+  firmware gap for an already commissioned board.
+
+## WP14-RUN-045 — Claim failure investigation and Wi-Fi mode arbitration
+
+- Time: 2026-11-03 13:31 Asia/Saigon (UTC+07:00), logged at 06:31 UTC.
+- Git: HEAD `02aed7aa9427086e5a42242ae58745ce6f31cea4`, branch `main`.
+  Worktree was already dirty before this run. No reset, clean, checkout or
+  deletion was performed; pre-existing WP14 files and build artifacts remain.
+- Goal: trace the Android claim failure, backend claim semantics and ESP32
+  SoftAP/STA lifecycle; fix Wi-Fi mode races and timer origin, improve safe
+  claim diagnostics, run tests/builds and prepare the physical test procedure.
+- Root cause evidence: source showed `wifi_reconnect_task()` could call
+  `esp_wifi_connect()` after the commissioning transition to SoftAP, explaining
+  the observed `ESP_ERR_WIFI_MODE`; this worker did not stop the AP. The
+  five-minute timer was started at commissioning gate task entry, before AP
+  startup. The log excerpt (AP around tick 8.45s, STA return around tick
+  300.7s) is consistent with expiry but does not prove the exact timer start.
+  Backend source confirms `DeviceClaimSession` is a challenge record; Device
+  Store linking occurs only after proof verification in the `/complete` path.
+  `APP_INSTALLATION_UPDATED` is unrelated to Device claim. Android's generic
+  catch spans challenge API/response parsing and synchronous SoftAP request
+  setup; async unavailable/lost callbacks have distinct messages. No Android
+  stack trace or claim response was available, so the exact exception for the
+  reported incident remains unverified.
+- Implementation files: `firmware/esp32/main/main.c` serializes Wi-Fi mode
+  changes, checks current mode and commissioning ownership before station
+  reconnect, records deliberate SoftAP timeout, and starts the five-minute
+  window after SoftAP/server startup; new
+  `commissioning_wifi_mode_policy.c/.h` and `CMakeLists.txt` encode the
+  reconnect gate; `commissioning_state.c/.h` and
+  `commissioning_state_test.c` reset the bounded lifecycle deadline at AP
+  startup; host runner and new `commissioning_wifi_mode_policy_test.c` cover
+  the policy. Owner `MainActivity.java` now labels claim stage and validates
+  challenge response; new `ClaimStartFailure.java` and its unit tests map
+  safe failure categories. `docs/development/firmware-build.md` and
+  `docs/firmware/store-device-wifi-commissioning.md` clarify timer origin and
+  retry steps. Detailed evidence is in
+  `docs/audits/wp14-11-device-claim-root-cause-and-e2e-report.md`.
+- Commands/results:
+  - C host command in Docker `gcc:13.2.0-bookworm`, network disabled and
+    read-only source mount: exit 0; 12 runners PASS, 0 FAIL, 0 SKIP.
+  - ESP-IDF 5.5.5 default ESP32-S3 build, `build/wp14-claim-fix-default`:
+    exit 0; image `0x33810`, 80% app partition free.
+  - ESP-IDF 5.5.5 staging ESP32-S3 build, `build/staging-run045`:
+    exit 0; image `0xec1d0` / 967,120 bytes, `0x13e30` / 81,456 bytes free
+    from the `0x100000` app partition (~8%). SHA-256
+    `0519CACD53E9DB94169220CB620599BF055739F8F5DF6451BBCC7AC0CC24C360`.
+    Non-fatal environment warning: `ESP_ROM_ELF_DIR` unset.
+  - Backend focused command
+    `npm test -- --run src/modules/provisioning/device-claim.service.test.ts src/modules/provisioning/provisioning.routes.test.ts`:
+    fresh elevated retry exit 0; 2 files, 7 passed. Initial sandbox run
+    failed before tests (`spawn EPERM`). No backend code changed.
+  - Owner command
+    `gradlew.bat :owner:testDebugUnitTest :owner:assembleDebug --rerun-tasks`:
+    exit 0; 24 passed, 0 failed, 0 errors, 0 skipped. APK
+    `apps/android-fcm-test/owner/build/outputs/apk/debug/owner-debug.apk`,
+    3,966,318 bytes, SHA-256
+    `26D04E0D24D0ECFC78CA71DB2293077447E95A843FF58299F87F09ED6A064808`.
+  - `adb install -r .../owner-debug.apk`: exit 0, install success;
+    `adb shell monkey -p com.pulselink.owner 1`: exit 0, launch intent
+    delivered. This did not sign in or call commissioning APIs.
+  - Default ESP-IDF build first attempted in sandbox: exit 1 before compiler
+    due Windows `WinError 5` creating Ninja subprocess; same build outside
+    sandbox exit 0.
+  - Docker suite sandbox access was denied; approved read-only Docker retry
+    passed as recorded above.
+  - Fresh `pnputil /enum-devices /class Ports`: COM4 is USB VID `303A`, PID
+    `1001`; COM3 is disconnected PID `4001`. `esptool --chip auto --port COM4
+    chip_id` was attempted both sandboxed and elevated; both failed with access
+    denied/busy (exit 1). No flash command was issued. RUN-045 staging image
+    therefore remains build-only; RUN-044 image is the last reported flash and
+    readback verification.
+  - `git diff --check`: PASS, exit 0 after report/log edits; only existing
+    LF/CRLF advisory warnings. Final `git status`/diff review confirmed no
+    generated secrets or unrelated tracked changes were introduced by this
+    increment.
+- Fresh evidence: current builds, C host suite, 7 focused backend tests, 24
+  Android JVM tests, APK install/launch, COM4 USB enumeration and busy-port
+  result. Historical only: RUN-044 board chip/revision, firmware flash and
+  readback. The RUN-044 flash is not evidence for RUN-045 image contents.
+- Security/data decisions: no TLS bypass, auth relaxation, token/credential
+  logging, Wi-Fi credential transfer, DB write/migration, claim, provisioning
+  session, Device Event, FCM/email, NVS erase, flash write, eFuse write or
+  security-mode change. Identity and operational credential remain in
+  ordinary NVS; no at-rest confidentiality is claimed. GPIO4 remains Event;
+  GPIO5 remains Commissioning in source/profile; carrier wiring is unverified.
+- Blockers/next actions: COM4 is busy; identify and close its owning process,
+  re-run `chip_id`, then flash only the verified staging image without NVS
+  erase and verify the written regions. Confirm actual carrier GPIO4/GPIO5
+  wiring. Run a supervised Owner claim, encrypted Wi-Fi transfer, redemption,
+  authenticated ONLINE, GPIO4 Event/ACK, notification and reboot recovery.
+  Exact Android incident exception and live claim response require fresh
+  redacted app/backend correlation evidence.
+- Overall: `PARTIALLY COMPLETED`. Software changes and builds/tests pass;
+  current firmware was not flashed and physical commissioning was not run.
+
+## WP14-RUN-046 — Startup recovery diagnostics and Device 401 handling
+
+- Time: 2026-11-03 14:03 Asia/Saigon (UTC+07:00).
+- Git: HEAD `02aed7aa9427086e5a42242ae58745ce6f31cea4`, branch `main`.
+  Worktree contained pre-existing WP14 changes; preserved without reset/clean.
+- Goal: identify why GPIO5 did not open SoftAP, trace Device Event 401 and
+  smoke request behavior, add safe diagnostics, fix response classification,
+  test and build without clearing NVS or modifying backend data.
+- Startup path verified in source: staging `wifi_start()` reads station
+  configuration from NVS because compile-time SSID is intentionally ignored.
+  Existing station configuration plus valid operational credential selects
+  backend recovery and does not create the GPIO5 confirmation task. GPIO5
+  input is configured, but sampled only by `commissioning_gate_task()` on the
+  commissioning path. With an invalid/I/O-failed credential, RUN-046 now
+  records a storage fault and blocks both recovery and automatic commissioning
+  fallback. Actual board NVS contents and branch remain unverified; COM4 was
+  not opened/read in RUN-046.
+- Event authentication source audit: commissioning staging builds load the
+  Event bearer value from operational credential provider `opcred` NVS and
+  call `esp_http_client_set_header("Authorization", ...)`; build-time token
+  is compiled only for non-commissioning profiles. Backend hashes the bearer
+  token and requires a matching non-disabled `ENROLLED`/`PROVISIONED` Device.
+  Logs do not reveal which predicate failed. ESP-IDF 5.5.5 source at
+  `components/esp_http_client/esp_http_client.c` emits the observed warning
+  while parsing a response `WWW-Authenticate` challenge it cannot handle and
+  returns `ESP_ERR_NOT_SUPPORTED`; it is not evidence that the request lacked
+  its Bearer header. Response headers/remote DB were not inspected, so the
+  challenge source and exact token/device mismatch remain unverified.
+- Root cause/software defects fixed: Event sender previously only classified
+  400/401/403/409 as permanent when `esp_http_client_perform()` returned
+  `ESP_OK`; a received 401 paired with `ESP_ERR_NOT_SUPPORTED` entered the
+  retry loop. It now persists the Event as blocked, never ACKs it and does not
+  retry indefinitely. Status probe and redemption now classify a received
+  nonzero HTTP status even if the HTTP client returns an error, so auth failure
+  cannot become a false network retry/ONLINE path. HTTP smoke remains optional
+  unauthenticated GET; current staging profile has empty `BACKEND_URL`, so it
+  is disabled. Safe diagnostics distinguish DNS, TCP, TLS, HTTP auth/server
+  and other transport failures, without logging response body or credentials.
+- Files changed in RUN-046: firmware `main.c`, `commissioning_redeem.c`,
+  `commissioning_backend_reachability_http.c`, `CMakeLists.txt`, new
+  `commissioning_startup_policy.c/.h`, `commissioning_http_response_policy.c/.h`,
+  `device_event_http_policy.c/.h`; host tests and `run_host_tests.sh`;
+  operator guide; new detailed report
+  `docs/audits/wp14-12-run-046-startup-recovery-and-device-auth-report.md`,
+  this log and WP14 summary. Backend and Android source were not changed.
+- Commands and actual results:
+  - `docker run --rm --network none --read-only --tmpfs /tmp:rw,exec,nosuid,size=128m --mount type=bind,src=D:/project-PulseLink,dst=/src,readonly --workdir /src/firmware/esp32 gcc:13.2.0-bookworm sh tests/run_host_tests.sh` — exit 0; 15 runners PASS, 0 FAIL, 0 SKIP (`physical`, `event-buttons`, `identity`, `lifecycle`, `wifi-mode-policy`, `startup-policy`, `http-response-policy`, `event-http-policy`, `transcript`, `crypto-interoperability`, `credential-storage`, `wifi-controller`, `backend-reachability`, `event-gate`, `nvs-credential-provider`).
+  - `npm test -- --run src/modules/device-events/device-event.service.test.ts src/modules/device-events/device-event.routes.test.ts src/modules/device-status/device-status.routes.test.ts src/modules/provisioning/provisioning.service.test.ts` in `server/api` — exit 0; 4 files, 20 tests PASS. No PostgreSQL integration or DB access.
+  - ESP-IDF 5.5.5 staging: `idf.py -B build/staging-run046 -D 'SDKCONFIG=build/staging-run046/sdkconfig' -D 'SDKCONFIG_DEFAULTS=sdkconfig.defaults;sdkconfig.staging.defaults' build` — exit 0 after final incremental build; ESP32-S3 app `0xecae0` / 969,440 bytes, partition `0x100000`, free `0x13520` / 78,880 bytes (~7.5%). SHA-256 `21541FE1E23B0A440F9D99E5490DA36D7BF8EC56055BC22334C75CFF599028C0`.
+  - ESP-IDF 5.5.5 default: `idf.py -B build/default-run046 -D 'SDKCONFIG=build/default-run046/sdkconfig' -D 'SDKCONFIG_DEFAULTS=sdkconfig.defaults' build` — exit 0; app `0x33860`, partition free `0xcc7a0` (~80%).
+  - Both builds emitted non-fatal `ESP_ROM_ELF_DIR` unset warning; final compilation/image checks passed.
+  - Profile inspection: commissioning enabled, operational storage enabled, HTTPS Event/redemption origins; optional smoke URL empty.
+  - `git diff --check` run after final docs/log edits; exact exit recorded after this append.
+- Fresh vs historical evidence: host suite, 20 backend tests, two current source builds and profile values are fresh RUN-046. COM4/board identity and RUN-044 flashed-image evidence remain historical only. RUN-046 image has not been flashed or read back.
+- Physical/data status: no NVS erase/read, no flash/reset, no button press, Wi-Fi provisioning, staging API request, claim/session, Event, DB write, FCM/email, eFuse or security-mode operation. NVS state and operational-token validity on board: `NOT VERIFIED`. COM4 was busy in RUN-045; no claim is made that the port state was rechecked in RUN-046.
+- Blockers and next steps: obtain safe boot metadata (station config yes/no, operational credential result, identity present and selected startup path) through an approved read-only diagnostic/available serial session. Do not dump raw NVS. If recovery path is active, GPIO5 is ignored by policy; authorized backend operator must verify Device hash/state using redacted metadata and apply an approved credential recovery contract. If reconfiguration is needed, design an explicit non-destructive GPIO5 recovery path separately. Current Event 401 becomes BLOCKED and needs an explicit operator-approved credential recovery/requeue process; no auto credential fallback exists.
+- Overall: `PARTIALLY COMPLETED`. Source, host tests, backend focused tests and default/staging builds pass. Physical startup path, credential validity, SoftAP, authenticated ONLINE and Event/ACK are not verified.
+
+### WP14-RUN-046 verification addendum
+
+- Fresh read-only `pnputil /enum-devices /class Ports` — exit 0; COM4 is
+  `USB Serial Device`, VID/PID `303A:1001`, status Started; COM3 is
+  disconnected. This does not establish board revision or running firmware.
+  No serial port was opened and no board operation was performed.
+- Final `git diff --check` after report/log edits — exit 0; LF-to-CRLF
+  advisories only.
+
+### WP14-RUN-047 — MVP E2E review and non-destructive recovery commissioning
+
+- Timestamp: 2026-11-03 14:32:36 +07:00.
+- Git HEAD: `02aed7aa9427086e5a42242ae58745ce6f31cea4`; branch `main`.
+  The worktree was dirty before this run with existing Android, firmware,
+  docs, reports, and generated `server/api/dist` changes. No reset, clean, or
+  checkout was performed. Backend build refreshed tracked generated output;
+  prior per-file dirty contents were not snapshotted, so generated output was
+  not reverted.
+- Goal: review and implement one MVP commissioning/recovery path across Owner
+  app, backend contracts, ESP32 and Device Event, while diagnosing RUN-046
+  missing SoftAP and HTTP 401 evidence.
+- Findings: source selected backend recovery for station config plus a valid
+  operational credential, but did not start/sample a GPIO5 gate in that path.
+  Board NVS was not inspected; whether the physical unit selected that path is
+  unknown. Firmware source sends Event/status with the operational NVS Bearer
+  credential; the observed 401 plus `ESP_ERR_NOT_SUPPORTED` does not establish
+  why backend rejected it. Exact credential/Device state remains unknown.
+- Implemented: recovery-path GPIO5 physical confirmation in a 30-second
+  startup window; on accepted hold/release, cancel recovery, own Wi-Fi mode,
+  start the existing SoftAP and bounded five-minute lifecycle, and return to
+  recovery on timeout without deleting persistent data. Added a separate
+  invalid-record repair startup path while keeping storage I/O faults
+  fail-closed. Added pure policy tests and updated Android wording and operator
+  guide. GPIO4, Event contract, Store authorization, provisioning protocol,
+  backend routes/schema and notification policy were not changed.
+- Files touched by this increment: `firmware/esp32/main/main.c`, new
+  `commissioning_startup_policy.c/.h`, new
+  `firmware/esp32/tests/commissioning_startup_policy_test.c`,
+  `apps/android-fcm-test/owner/src/main/java/com/pulselink/owner/MainActivity.java`,
+  `docs/firmware/store-device-wifi-commissioning.md`, this log, WP14.9 summary,
+  and `docs/audits/wp14-13-run-047-mvp-end-to-end-review-and-implementation.md`.
+  No database schema/migration or dependency changed.
+- Commands/results:
+  - `docker run --rm --network none --read-only --tmpfs /tmp:rw,exec,nosuid,size=128m --mount type=bind,src=D:/project-PulseLink,dst=/src,readonly --workdir /src/firmware/esp32 gcc:13.2.0-bookworm sh tests/run_host_tests.sh` — exit 0; 15 runners PASS, 0 FAIL, 0 SKIP. Earlier sandbox Docker access was denied; approved elevated rerun executed. One initial startup-window assertion failed at the exclusive deadline; corrected test checks the last instant inside the window, then all tests passed.
+  - ESP-IDF 5.5.5 staging build `idf.py -B build/staging-run047 -D 'SDKCONFIG=build/staging-run047/sdkconfig' -D 'SDKCONFIG_DEFAULTS=sdkconfig.defaults;sdkconfig.staging.defaults' build` — exit 0; app `0xed340` / 971,584 bytes, partition `0x100000`, free `0x12cc0` / 76,992 bytes (~7.3%); SHA-256 `338B4CFACE6CADD0DB1DFB350221CA8320A42A42C67E3F71F39F9BF1C1E1A118`.
+  - ESP-IDF 5.5.5 default build `idf.py -B build/default-run046 -D 'SDKCONFIG=build/default-run046/sdkconfig' -D 'SDKCONFIG_DEFAULTS=sdkconfig.defaults' build` — exit 0; app `0x33860` / 211,040 bytes, free `0xcc7a0` / 837,536 bytes (~80%); SHA-256 `170E13BD1A6A81EDB40CEA9D63E7266C148E6285C34433B4BE7D718B3614A018`. Non-fatal default-profile unused `s_event_button` warning observed because that profile disables the event button.
+  - `./gradlew :owner:testDebugUnitTest :owner:assembleDebug` in `apps/android-fcm-test` — exit 0; 24 JVM tests PASS; APK `owner/build/outputs/apk/debug/owner-debug.apk`, 4,007,671 bytes, SHA-256 `7A647A0B7C9D812CB2001DFC777CCB484E570A444D1C0BD0C8B79F619CB257DD`. Not installed/launched. Initial Gradle cache access was sandbox-blocked; elevated rerun passed.
+  - Backend focused `npm test -- --run src/modules/provisioning/device-claim.service.test.ts src/modules/provisioning/provisioning.service.test.ts src/modules/provisioning/provisioning.routes.test.ts src/modules/device-events/device-event.service.test.ts src/modules/device-events/device-event.routes.test.ts src/modules/device-status/device-status.routes.test.ts src/modules/notifications/notification-worker.test.ts` — exit 0; 7 files, 35 tests PASS. Initial subprocess spawn was sandbox-blocked; elevated rerun passed.
+  - `npm run typecheck` (`server/api`) — exit 0. `npm run build` — exit 0; generated Prisma client and TypeScript output, no DB connection/write. Initial ESP-IDF environment/subprocess attempts failed before build; used installed ESP-IDF 5.5.5 Python 3.11 environment and approved elevated run.
+  - `git diff --check` — exit 0; Git emitted LF-to-CRLF advisories only.
+- Fresh evidence: host suite, both firmware builds, APK/JVM tests, backend focused tests/typecheck/build and diff check above. Historical only: RUN-044 physical board/image evidence and user-reported app sign-up/store behavior.
+- Not run: DB integration (no DB logic/schema change and no test DB operation needed); Android device install/runtime; staging API requests; board/serial/NVS inspection; flash/reset; GPIO press; SoftAP/Wi-Fi; redemption; authenticated ONLINE; Device Event/ACK; reboot recovery; FCM/email. No production/staging/database writes and no security fuse/configuration operations.
+- Security decision: retain existing auth, claim, proof, TLS, Event idempotency and commit-before-ACK. Reconfiguration uses the existing Owner session and encrypted provisioning handshake; no new endpoint, unauthenticated bypass, plaintext fallback, NVS erase, or secret logging. Ordinary NVS remains extractable; TOFU limitation unchanged.
+- Blockers/next actions: exact remote reason for the 401 and actual board startup/NVS state require authorized redacted runtime diagnostics. Verify correct staging image/board, then exercise GPIO5 within the boot window, Owner-created fresh provisioning session, Wi-Fi, redemption, status and Event/ACK on hardware; reboot recovery and push delivery require separate evidence. Existing BLOCKED Event remains blocked and is not automatically replayed.
+- Final status: `PARTIALLY COMPLETED` — software tests/builds pass; physical commissioning and remote credential recovery are not verified.
+
+#### WP14-RUN-047 final verification addendum
+
+- Final review found that backend recovery can reach `ONLINE` before the user
+  completes GPIO5 within the 30-second window. Added a pure policy permitting
+  reconfiguration when recovery is active (cancel it) or has reached terminal
+  `ONLINE`/`FAILED`; unrelated in-progress states remain rejected. Host tests
+  now cover these cases. This corrects timing independence without changing the
+  commissioning protocol.
+- Re-ran the complete Docker host suite after this final change — exit 0;
+  15 runners PASS, 0 FAIL, 0 SKIP.
+- Rebuilt both firmware profiles after the final change. Final staging image:
+  `0xed370` / 971,632 bytes; 76,944 bytes free in the 1 MiB app partition;
+  SHA-256 `F9B4C3BCBAF5F3C98CCBA3D0124BC417F61BAE5174661CA985FC889F5DE4B50A`.
+  Final default image: `0x33860` / 211,040 bytes; 837,536 bytes free;
+  SHA-256 `A402D726B6A959BB508D7CE6AB061AD71E6177283B7A7C8D8BF11C1F3E6CE493`.
+  Both builds exit 0. The earlier image values in the RUN-047 entry were from
+  the successful pre-review build and are superseded by these final artifacts.
+- `git diff --check` after final report/log changes — exit 0; line-ending
+  advisories only.
+- After correcting the Android instruction to state the confirmation window
+  begins after Wi-Fi initialization, reran `./gradlew :owner:testDebugUnitTest
+  :owner:assembleDebug` — exit 0; 24 tests pass. Final APK is 4,007,699 bytes,
+  SHA-256 `19B4F07887F2893622AE1770E4BC0775B27D79834888915D8379B28E8A366814`.
+- Final `git diff --check` after all report/source edits — exit 0; line-ending
+  conversion advisories only.
+- Report clarification: firmware authenticated-recovery/Event gate state is
+  distinct from the persisted backend Device `ONLINE`/last-seen state, which
+  follows the existing first authenticated Event acceptance behavior; push
+  delivery remains asynchronous and separate from ACK. Final `git diff --check`
+  after this clarification — exit 0.

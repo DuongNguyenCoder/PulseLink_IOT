@@ -122,8 +122,12 @@ Wi-Fi persistence and recovery before any flash or runtime test.
 ## Staging commissioning profile
 
 `sdkconfig.staging.defaults` selects the approved staging HTTPS origin and
-GPIO4 for both the physical commissioning gate and operational button. The
-Owner app's `google-services.json` is local Firebase project configuration;
+16 MiB flash header for the N16R8 firmware target. The staging profile assigns
+GPIO4 to the operational Event button and GPIO5 to commissioning. Source/config
+separate the two inputs; this does not verify the external carrier-board wiring.
+Do not flash or wire the board based on this mapping until its schematic or
+revision-specific pinout confirms GPIO5 is available and connected as intended.
+The Owner app's `google-services.json` is local Firebase project configuration;
 never copy it into reports or print its contents. Firmware defaults contain no
 Wi-Fi password, device token or per-device key.
 
@@ -131,8 +135,8 @@ Build into an isolated directory so the machine-local `sdkconfig` is not
 overwritten:
 
 ```powershell
-& $idfPython "$idfRoot\tools\idf.py" -B build/staging `
-  -D 'SDKCONFIG=build/staging/sdkconfig' `
+& $idfPython "$idfRoot\tools\idf.py" -B build/staging-gpio-split `
+  -D 'SDKCONFIG=build/staging-gpio-split/sdkconfig' `
   -D 'SDKCONFIG_DEFAULTS=sdkconfig.defaults;sdkconfig.commissioning-mvp.defaults;sdkconfig.staging.defaults' `
   set-target esp32s3 build
 ```
@@ -142,3 +146,21 @@ providers. It does not encrypt NVS, attest genuine hardware, or prove runtime
 recovery; flash extraction can disclose those values. The build is not flash
 authorization. For Owner push delivery, staging backend configuration must use
 `NOTIFICATION_RECIPIENT_MODE=account`; repository default remains `legacy`.
+
+For first claim, hold the separate commissioning input (GPIO5 in the staging
+profile) active-low for at least 1.5 seconds, then release it. The 30-second
+physical-confirmation window starts when `commissioning_gate_task` begins after
+Wi-Fi initialization; it is not measured from chip boot. The gesture must be
+accepted before that deadline. After the gesture and successful SoftAP/server
+startup, a separate five-minute SoftAP lifecycle begins. This bounded timer
+allows the Owner to complete claim proof and send Wi-Fi configuration without
+losing time spent before the AP opened. GPIO4 remains the independent Event
+button. The SoftAP SSID is `PulseLink-XXXX`, where `XXXX` is the uppercase final
+four characters of the public Device ID. On Android, select the Store, enter or
+scan the public Device ID, tap **Claim Device and prepare Wi-Fi**, and accept
+Android's Wi-Fi connection prompt. After the backend confirms the claim, enter
+the venue's 2.4-GHz Wi-Fi credentials in the app and send them over the
+authenticated encrypted commissioning session. A Device already claimed by
+the selected Store should use **Create provisioning session** while its
+SoftAP is active; a Device claimed by another Store cannot be transferred by
+QR or a repeated claim request.
