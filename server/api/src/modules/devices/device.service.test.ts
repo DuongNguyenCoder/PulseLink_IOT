@@ -68,7 +68,7 @@ describe("Owner device lifecycle", () => {
       database(),
       "account-1",
       "store-1",
-      { name: "Front button" },
+      { deviceId: "pl-021122334455", name: "Front button" },
     );
     expect(created).toMatchObject({
       id: "device-1",
@@ -76,6 +76,15 @@ describe("Owner device lifecycle", () => {
       status: "PENDING",
     });
     expect(created).not.toHaveProperty("deviceSecretHash");
+  });
+
+  it("rejects a non MAC-derived identity before persistence", async () => {
+    await expect(
+      createDeviceForOwner(database(), "account-1", "store-1", {
+        deviceId: "cuid-generated-device",
+        name: "Front button",
+      }),
+    ).rejects.toMatchObject({ statusCode: 400 });
   });
 
   it("lists only the authorized Store's device metadata", async () => {

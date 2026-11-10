@@ -9,6 +9,7 @@ import {
   type DeviceClaimProof,
 } from "./provisioning-crypto.js";
 import { ProvisioningError, requireOwner } from "./provisioning.service.js";
+import { isMacDerivedDeviceId } from "../devices/device-identity.js";
 
 export interface DeviceClaimSessionRecord {
   id: string;
@@ -66,6 +67,9 @@ export async function createDeviceClaimSession(
   name: string,
   now = new Date(),
 ): Promise<{ session: DeviceClaimSessionRecord; challenge: string } | { alreadyClaimed: true; device: ClaimedDeviceRecord }> {
+  if (!isMacDerivedDeviceId(deviceId)) {
+    throw new ProvisioningError("Invalid MAC-derived Device ID", 400);
+  }
   await requireOwner(db as never, accountId, storeId);
   const existing = await db.device.findUnique({ where: { id: deviceId } });
   if (existing !== null) {

@@ -8,8 +8,7 @@ import {
 export interface ClaimedNotificationJob {
   id: string;
   eventId: string;
-  pushTokenId: string | null;
-  appInstallationId: string | null;
+  appInstallationId: string;
   token: string;
   tokenFingerprint: string | null;
   eventType: string;
@@ -53,7 +52,6 @@ export interface NotificationJobRepository {
   markSent(id: string, messageId: string, now: Date): Promise<void>;
   markRetry(id: string, nextAttemptAt: Date, reason: string): Promise<void>;
   markFailed(id: string, reason: string): Promise<void>;
-  deactivateToken(pushTokenId: string, now: Date): Promise<void>;
   revalidate?(job: ClaimedNotificationJob): Promise<NotificationEligibility>;
   cancel?(id: string, reason: string): Promise<void>;
   cancelIneligibleJobs?(now: Date): Promise<number>;
@@ -257,18 +255,10 @@ export class NotificationWorker {
     } catch (error: unknown) {
       const reason = boundedReason(error);
       if (error instanceof InvalidFcmTokenError) {
-        if (
-          job.appInstallationId !== null &&
-          this.repository.invalidateInstallationToken !== undefined
-        ) {
+        if (this.repository.invalidateInstallationToken !== undefined) {
           await this.repository.invalidateInstallationToken(
             job.appInstallationId,
             tokenFingerprint,
-            this.options.now(),
-          );
-        } else if (job.pushTokenId !== null) {
-          await this.repository.deactivateToken(
-            job.pushTokenId,
             this.options.now(),
           );
         }

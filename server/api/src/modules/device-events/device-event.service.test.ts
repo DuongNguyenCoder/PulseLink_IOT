@@ -66,7 +66,7 @@ function database(
       callback({
         device: { updateMany: overrides.updateMany ?? (async () => ({ count: 1 })) },
         deviceEvent: { create: overrides.create ?? (async () => record()) },
-        staffPushToken: { findMany: async () => [] },
+        appInstallation: { findMany: async () => [] },
         deviceNotification: { createMany: async () => ({ count: 0 }) },
       }),
   } as unknown as DeviceEventDatabase;

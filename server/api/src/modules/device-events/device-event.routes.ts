@@ -3,7 +3,6 @@ import {
   DeviceEventError,
   ingestDeviceEvent,
   type DeviceEventDatabase,
-  type NotificationRecipientMode,
 } from "./device-event.service.js";
 import { deviceEventBodySchema } from "./device-event.schema.js";
 
@@ -18,13 +17,7 @@ function deviceToken(request: FastifyRequest): string {
   return authorization.replace(/^Bearer\s+/i, "");
 }
 
-export interface DeviceEventRouteOptions {
-  recipientMode?: NotificationRecipientMode;
-}
-
-export const deviceEventRoutes: FastifyPluginAsync<
-  DeviceEventRouteOptions
-> = async (app, options) => {
+export const deviceEventRoutes: FastifyPluginAsync = async (app) => {
   app.post("/device-events", async (request, reply) => {
     const parsed = deviceEventBodySchema.safeParse(request.body);
     if (!parsed.success) throw new DeviceEventError("Invalid request", 400);
@@ -34,7 +27,6 @@ export const deviceEventRoutes: FastifyPluginAsync<
       deviceToken(request),
       parsed.data,
       new Date(),
-      options.recipientMode ?? "legacy",
     );
 
     request.log.info(

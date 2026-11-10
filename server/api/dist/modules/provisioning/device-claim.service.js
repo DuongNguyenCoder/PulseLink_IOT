@@ -2,11 +2,15 @@ import { Prisma } from "../../generated/prisma/client.js";
 import { writeAuditEvent } from "../../shared/audit.js";
 import { generateChallenge, generateOperationalToken, hashChallenge, hashDeviceToken, verifyDeviceClaimProof, } from "./provisioning-crypto.js";
 import { ProvisioningError, requireOwner } from "./provisioning.service.js";
+import { isMacDerivedDeviceId } from "../devices/device-identity.js";
 ;
 function isUniqueViolation(error) {
     return error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002";
 }
 export async function createDeviceClaimSession(db, accountId, storeId, deviceId, name, now = new Date()) {
+    if (!isMacDerivedDeviceId(deviceId)) {
+        throw new ProvisioningError("Invalid MAC-derived Device ID", 400);
+    }
     await requireOwner(db, accountId, storeId);
     const existing = await db.device.findUnique({ where: { id: deviceId } });
     if (existing !== null) {

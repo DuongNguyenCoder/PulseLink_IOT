@@ -7,6 +7,12 @@ export class PrismaNotificationJobRepository {
         this.fcmKeys = fcmKeys;
     }
     async cancelIneligibleJobs(now) {
+        const legacyJobs = await this.db.$executeRaw `
+      UPDATE "DeviceNotification"
+      SET "status" = 'CANCELLED'::"NotificationStatus", "leaseUntil" = NULL,
+          "lastError" = 'legacy_recipient_retired', "updatedAt" = ${now}
+      WHERE "appInstallationId" IS NULL
+        AND "status" IN ('PENDING'::"NotificationStatus", 'PROCESSING'::"NotificationStatus")`;
         const result = await this.db.$executeRaw `
       UPDATE "DeviceNotification" n
       SET "status" = 'CANCELLED'::"NotificationStatus", "leaseUntil" = NULL,
@@ -26,20 +32,18 @@ export class PrismaNotificationJobRepository {
             AND sm."status" = 'ACTIVE'::"MembershipStatus"
             AND sm."role" IN ('OWNER'::"MembershipRole", 'STAFF'::"MembershipRole")
         )`;
-        return Number(result);
+        return Number(result) + Number(legacyJobs);
     }
     async claim(limit, now, leaseUntil) {
         const rows = await this.db.$queryRaw `
       WITH candidates AS (
-        SELECT n."id", n."eventId", n."pushTokenId", n."appInstallationId",
+        SELECT n."id", n."eventId", n."appInstallationId",
                (n."status" = 'PROCESSING'::"NotificationStatus") AS "leaseRecovered"
         FROM "DeviceNotification" n
         WHERE ((n."status" = 'PENDING'::"NotificationStatus" AND n."nextAttemptAt" <= ${now})
           OR (n."status" = 'PROCESSING'::"NotificationStatus" AND (n."leaseUntil" IS NULL OR n."leaseUntil" <= ${now}))
         )
-          AND ((n."appInstallationId" IS NULL AND EXISTS (
-            SELECT 1 FROM "StaffPushToken" t WHERE t."id" = n."pushTokenId" AND t."isActive" = true))
-            OR (n."appInstallationId" IS NOT NULL AND EXISTS (
+          AND n."appInstallationId" IS NOT NULL AND EXISTS (
               SELECT 1 FROM "AppInstallation" ai
               JOIN "Account" a ON a."id" = ai."accountId"
               JOIN "DeviceEvent" e ON e."id" = n."eventId"
@@ -48,70 +52,47 @@ export class PrismaNotificationJobRepository {
               WHERE ai."id" = n."appInstallationId" AND ai."status" = 'ACTIVE'::"AppInstallationStatus"
                 AND ai."fcmTokenCiphertext" IS NOT NULL AND ai."fcmTokenFingerprint" IS NOT NULL
                 AND a."status" = 'ACTIVE'::"AccountStatus" AND sm."status" = 'ACTIVE'::"MembershipStatus"
-                AND sm."role" IN ('OWNER'::"MembershipRole", 'STAFF'::"MembershipRole"))))
+                AND sm."role" IN ('OWNER'::"MembershipRole", 'STAFF'::"MembershipRole")))
         ORDER BY n."nextAttemptAt", n."createdAt" FOR UPDATE SKIP LOCKED LIMIT ${limit}
       ), claimed AS (
         UPDATE "DeviceNotification" n
         SET "status" = 'PROCESSING'::"NotificationStatus", "attempts" = n."attempts" + 1,
             "leaseUntil" = ${leaseUntil}, "updatedAt" = ${now}
         FROM candidates c WHERE n."id" = c."id"
-        RETURNING n."id", n."eventId", n."pushTokenId", n."appInstallationId", n."attempts"
+        RETURNING n."id", n."eventId", n."appInstallationId", n."attempts"
       )
-      SELECT c."id", c."eventId", c."pushTokenId", c."appInstallationId", t."token" AS "legacyToken",
+      SELECT c."id", c."eventId", c."appInstallationId",
              ai."fcmTokenCiphertext", ai."fcmTokenFingerprint", e."type"::text AS "eventType",
              c."attempts", e."receivedAt" AS "eventReceivedAt", candidates."leaseRecovered"
       FROM claimed c JOIN candidates ON candidates."id" = c."id"
-      LEFT JOIN "StaffPushToken" t ON t."id" = c."pushTokenId"
       LEFT JOIN "AppInstallation" ai ON ai."id" = c."appInstallationId"
       JOIN "DeviceEvent" e ON e."id" = c."eventId"`;
         const jobs = [];
         for (const row of rows) {
-            if (row.appInstallationId !== null) {
-                if (this.fcmKeys === undefined || row.fcmTokenCiphertext === null) {
-                    await this.markFailed(row.id, "invalid_fcm_token_material");
-                    continue;
-                }
-                try {
-                    jobs.push({
-                        id: row.id,
-                        eventId: row.eventId,
-                        pushTokenId: null,
-                        appInstallationId: row.appInstallationId,
-                        token: decryptFcmToken(row.fcmTokenCiphertext, this.fcmKeys),
-                        tokenFingerprint: row.fcmTokenFingerprint,
-                        eventType: row.eventType,
-                        attempts: row.attempts,
-                        eventReceivedAt: row.eventReceivedAt,
-                        leaseRecovered: row.leaseRecovered,
-                    });
-                }
-                catch {
-                    await this.markFailed(row.id, "invalid_fcm_token_material");
-                }
+            if (this.fcmKeys === undefined || row.fcmTokenCiphertext === null) {
+                await this.markFailed(row.id, "invalid_fcm_token_material");
                 continue;
             }
-            if (row.legacyToken === null || row.pushTokenId === null) {
-                await this.markFailed(row.id, "legacy_token_missing");
-                continue;
+            try {
+                jobs.push({
+                    id: row.id,
+                    eventId: row.eventId,
+                    appInstallationId: row.appInstallationId,
+                    token: decryptFcmToken(row.fcmTokenCiphertext, this.fcmKeys),
+                    tokenFingerprint: row.fcmTokenFingerprint,
+                    eventType: row.eventType,
+                    attempts: row.attempts,
+                    eventReceivedAt: row.eventReceivedAt,
+                    leaseRecovered: row.leaseRecovered,
+                });
             }
-            jobs.push({
-                id: row.id,
-                eventId: row.eventId,
-                pushTokenId: row.pushTokenId,
-                appInstallationId: null,
-                token: row.legacyToken,
-                tokenFingerprint: null,
-                eventType: row.eventType,
-                attempts: row.attempts,
-                eventReceivedAt: row.eventReceivedAt,
-                leaseRecovered: row.leaseRecovered,
-            });
+            catch {
+                await this.markFailed(row.id, "invalid_fcm_token_material");
+            }
         }
         return jobs;
     }
     async revalidate(job) {
-        if (job.appInstallationId === null)
-            return { eligible: true, token: job.token };
         if (this.fcmKeys === undefined)
             return { eligible: false, reason: "fcm_keys_unavailable" };
         const rows = await this.db.$queryRaw `
@@ -232,12 +213,6 @@ export class PrismaNotificationJobRepository {
                 leaseUntil: null,
                 lastError: reason.slice(0, 1000),
             },
-        });
-    }
-    async deactivateToken(pushTokenId, now) {
-        await this.db.staffPushToken.update({
-            where: { id: pushTokenId },
-            data: { isActive: false, lastSeenAt: now },
         });
     }
     async invalidateInstallationToken(installationId, fingerprint, now) {

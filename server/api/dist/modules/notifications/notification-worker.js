@@ -113,12 +113,8 @@ export class NotificationWorker {
         catch (error) {
             const reason = boundedReason(error);
             if (error instanceof InvalidFcmTokenError) {
-                if (job.appInstallationId !== null &&
-                    this.repository.invalidateInstallationToken !== undefined) {
+                if (this.repository.invalidateInstallationToken !== undefined) {
                     await this.repository.invalidateInstallationToken(job.appInstallationId, tokenFingerprint, this.options.now());
-                }
-                else if (job.pushTokenId !== null) {
-                    await this.repository.deactivateToken(job.pushTokenId, this.options.now());
                 }
                 await this.repository.markFailed(job.id, reason);
                 this.metrics.failed += 1;

@@ -4,6 +4,7 @@ import {
   hashDeviceToken,
 } from "../provisioning/provisioning-crypto.js";
 import { writeAuditEvent } from "../../shared/audit.js";
+import { isMacDerivedDeviceId } from "./device-identity.js";
 
 export interface DeviceDatabase {
   account: {
@@ -95,9 +96,12 @@ export async function createDeviceForOwner(
   db: DeviceDatabase,
   accountId: string,
   storeId: string,
-  input: { name: string; firmwareVersion?: string },
+  input: { deviceId: string; name: string; firmwareVersion?: string },
   requestId?: string,
 ): Promise<DeviceMetadata> {
+  if (!isMacDerivedDeviceId(input.deviceId)) {
+    throw new DeviceAuthorizationError("Invalid MAC-derived Device ID", 400);
+  }
   await requireOwner(db, accountId, storeId);
   try {
     return await db.$transaction(async (tx) => {
@@ -105,6 +109,7 @@ export async function createDeviceForOwner(
       const deviceKey = generateOperationalToken();
       const device = await tx.device.create({
         data: {
+          id: input.deviceId,
           deviceKey,
           deviceSecretHash: hashDeviceToken(generateOperationalToken()),
           name: input.name,

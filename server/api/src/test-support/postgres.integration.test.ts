@@ -78,11 +78,13 @@ const accountIds = new Set<string>();
 const installationIds = new Set<string>();
 const storeIds = new Set<string>();
 const deviceIds = new Set<string>();
+
+function createTestDeviceId(): string {
+  return `pl-${randomBytes(6).toString("hex")}`;
+}
 const provisioningSessionIds = new Set<string>();
 const deviceClaimSessionIds = new Set<string>();
 const eventIds = new Set<string>();
-const staffIds = new Set<string>();
-const pushTokenIds = new Set<string>();
 const fcmKeys: FcmKeyMaterial = {
   activeVersion: 1,
   encryptionKeys: new Map([[1, randomBytes(32)]]),
@@ -179,8 +181,6 @@ async function cleanupCreatedRows(): Promise<void> {
   const provisioningSessions = [...provisioningSessionIds];
   const deviceClaimSessions = [...deviceClaimSessionIds];
   const events = [...eventIds];
-  const staff = [...staffIds];
-  const pushTokens = [...pushTokenIds];
 
   if (events.length > 0) {
     const eventRows = await prisma.deviceEvent.findMany({
@@ -192,15 +192,6 @@ async function cleanupCreatedRows(): Promise<void> {
     });
     await prisma.deviceEvent.deleteMany({ where: { eventId: { in: events } } });
   }
-  if (pushTokens.length > 0) {
-    await prisma.staffPushToken.deleteMany({
-      where: { id: { in: pushTokens } },
-    });
-  }
-  if (staff.length > 0) {
-    await prisma.staff.deleteMany({ where: { id: { in: staff } } });
-  }
-
   if (provisioningSessions.length > 0) {
     await prisma.provisioningSession.deleteMany({
       where: { id: { in: provisioningSessions } },
@@ -250,8 +241,6 @@ async function cleanupCreatedRows(): Promise<void> {
   provisioningSessionIds.clear();
   deviceClaimSessionIds.clear();
   eventIds.clear();
-  staffIds.clear();
-  pushTokenIds.clear();
 }
 
 integrationDescribe("PostgreSQL schema and session integration", () => {
@@ -588,6 +577,7 @@ integrationDescribe("PostgreSQL schema and session integration", () => {
     const token = `integration-device-token-${randomUUID()}`;
     const device = await prisma.device.create({
       data: {
+        id: createTestDeviceId(),
         deviceKey: `integration-device-${randomUUID()}`,
         deviceSecretHash: hashDeviceToken(token),
         name: "Integration event device",
@@ -599,20 +589,11 @@ integrationDescribe("PostgreSQL schema and session integration", () => {
       select: { id: true },
     });
     deviceIds.add(device.id);
-    const staff = await prisma.staff.create({
-      data: { name: "Integration staff", storeId },
-      select: { id: true },
+    const recipientAccountId = await createAccount();
+    await prisma.storeMembership.create({
+      data: { accountId: recipientAccountId, storeId, role: "STAFF", status: "ACTIVE" },
     });
-    staffIds.add(staff.id);
-    const pushToken = await prisma.staffPushToken.create({
-      data: {
-        staffId: staff.id,
-        token: `integration-fcm-${randomUUID()}`,
-        platform: "ANDROID",
-      },
-      select: { id: true },
-    });
-    pushTokenIds.add(pushToken.id);
+    await createInstallation(recipientAccountId);
 
     const input: DeviceEventBody = {
       eventId: randomUUID(),
@@ -668,6 +649,7 @@ integrationDescribe("PostgreSQL schema and session integration", () => {
     const deviceToken = `integration-account-device-${randomUUID()}`;
     const device = await prisma.device.create({
       data: {
+        id: createTestDeviceId(),
         deviceKey: `integration-account-device-${randomUUID()}`,
         deviceSecretHash: hashDeviceToken(deviceToken),
         name: "Integration account notification device",
@@ -692,7 +674,6 @@ integrationDescribe("PostgreSQL schema and session integration", () => {
       deviceToken,
       input,
       new Date(),
-      "account",
     );
     await expect(
       Promise.all([
@@ -701,26 +682,24 @@ integrationDescribe("PostgreSQL schema and session integration", () => {
           deviceToken,
           input,
           new Date(),
-          "account",
         ),
         ingestDeviceEvent(
           prisma as never,
           deviceToken,
           input,
           new Date(),
-          "account",
         ),
       ]),
     ).resolves.toHaveLength(2);
     const jobs = await prisma.deviceNotification.findMany({
       where: { eventId: accepted.event.id },
-      select: { appInstallationId: true, pushTokenId: true },
+      select: { appInstallationId: true },
       orderBy: { appInstallationId: "asc" },
     });
     expect(jobs).toEqual(
       [
-        { appInstallationId: ownerInstallationId, pushTokenId: null },
-        { appInstallationId: staffInstallationId, pushTokenId: null },
+        { appInstallationId: ownerInstallationId },
+        { appInstallationId: staffInstallationId },
       ].sort((left, right) =>
         (left.appInstallationId ?? "").localeCompare(
           right.appInstallationId ?? "",
@@ -747,6 +726,7 @@ integrationDescribe("PostgreSQL schema and session integration", () => {
     const deviceToken = `integration-account-worker-device-${randomUUID()}`;
     const device = await prisma.device.create({
       data: {
+        id: createTestDeviceId(),
         deviceKey: `acct-worker-${randomUUID()}`,
         deviceSecretHash: hashDeviceToken(deviceToken),
         name: "Integration account worker device",
@@ -770,7 +750,6 @@ integrationDescribe("PostgreSQL schema and session integration", () => {
       deviceToken,
       input,
       new Date(),
-      "account",
     );
 
     const delivered: string[] = [];
@@ -812,6 +791,7 @@ integrationDescribe("PostgreSQL schema and session integration", () => {
     const deviceToken = `integration-revoke-device-${randomUUID()}`;
     const device = await prisma.device.create({
       data: {
+        id: createTestDeviceId(),
         deviceKey: `revoke-${randomUUID()}`,
         deviceSecretHash: hashDeviceToken(deviceToken),
         name: "Integration revoke device",
@@ -858,6 +838,7 @@ integrationDescribe("PostgreSQL schema and session integration", () => {
     const token = `integration-worker-device-${randomUUID()}`;
     const device = await prisma.device.create({
       data: {
+        id: createTestDeviceId(),
         deviceKey: `integration-worker-device-${randomUUID()}`,
         deviceSecretHash: hashDeviceToken(token),
         name: "Integration worker device",
@@ -869,20 +850,19 @@ integrationDescribe("PostgreSQL schema and session integration", () => {
       select: { id: true },
     });
     deviceIds.add(device.id);
-    const staff = await prisma.staff.create({
-      data: { name: "Integration worker staff", storeId },
-      select: { id: true },
+    const workerAccountId = await createAccount();
+    await prisma.storeMembership.create({
+      data: { accountId: workerAccountId, storeId, role: "STAFF", status: "ACTIVE" },
     });
-    staffIds.add(staff.id);
-    const pushToken = await prisma.staffPushToken.create({
-      data: {
-        staffId: staff.id,
-        token: `integration-worker-fcm-${randomUUID()}`,
-        platform: "ANDROID",
-      },
-      select: { id: true },
-    });
-    pushTokenIds.add(pushToken.id);
+    const workerInstallationId = randomUUID();
+    installationIds.add(workerInstallationId);
+    const workerFcmToken = `integration-worker-fcm-${randomUUID()}`;
+    await registerInstallation(
+      prisma as never,
+      workerAccountId,
+      { installationId: workerInstallationId, platform: "ANDROID", fcmToken: workerFcmToken },
+      fcmKeys,
+    );
 
     const input: DeviceEventBody = {
       eventId: randomUUID(),
@@ -928,6 +908,7 @@ integrationDescribe("PostgreSQL schema and session integration", () => {
     const token = `integration-lease-device-${randomUUID()}`;
     const device = await prisma.device.create({
       data: {
+        id: createTestDeviceId(),
         deviceKey: `integration-lease-device-${randomUUID()}`,
         deviceSecretHash: hashDeviceToken(token),
         name: "Integration lease device",
@@ -939,20 +920,18 @@ integrationDescribe("PostgreSQL schema and session integration", () => {
       select: { id: true },
     });
     deviceIds.add(device.id);
-    const staff = await prisma.staff.create({
-      data: { name: "Integration lease staff", storeId },
-      select: { id: true },
+    const leaseAccountId = await createAccount();
+    await prisma.storeMembership.create({
+      data: { accountId: leaseAccountId, storeId, role: "STAFF", status: "ACTIVE" },
     });
-    staffIds.add(staff.id);
-    const pushToken = await prisma.staffPushToken.create({
-      data: {
-        staffId: staff.id,
-        token: `integration-lease-fcm-${randomUUID()}`,
-        platform: "ANDROID",
-      },
-      select: { id: true },
-    });
-    pushTokenIds.add(pushToken.id);
+    const leaseInstallationId = randomUUID();
+    installationIds.add(leaseInstallationId);
+    await registerInstallation(
+      prisma as never,
+      leaseAccountId,
+      { installationId: leaseInstallationId, platform: "ANDROID", fcmToken: `integration-lease-fcm-${randomUUID()}` },
+      fcmKeys,
+    );
 
     const input: DeviceEventBody = {
       eventId: randomUUID(),
@@ -1042,6 +1021,7 @@ integrationDescribe("PostgreSQL schema and session integration", () => {
     const storeB = await createStore();
     const device = await prisma.device.create({
       data: {
+        id: createTestDeviceId(),
         deviceKey: `device-${randomUUID()}`,
         deviceSecretHash: "test-device-secret-hash",
         name: "Provisioning fixture",
@@ -1070,6 +1050,7 @@ integrationDescribe("PostgreSQL schema and session integration", () => {
 
     const secondDevice = await prisma.device.create({
       data: {
+        id: createTestDeviceId(),
         deviceKey: `device-${randomUUID()}`,
         deviceSecretHash: "test-device-secret-hash",
         name: "Provisioning scope fixture",
@@ -1098,6 +1079,7 @@ integrationDescribe("PostgreSQL schema and session integration", () => {
     const storeId = await createStore();
     const device = await prisma.device.create({
       data: {
+        id: createTestDeviceId(),
         deviceKey: `device-${randomUUID()}`,
         deviceSecretHash: "test-device-secret-hash",
         name: "Concurrent provisioning fixture",
@@ -1144,6 +1126,7 @@ integrationDescribe("PostgreSQL schema and session integration", () => {
     const storeId = await createStore();
     const device = await prisma.device.create({
       data: {
+        id: createTestDeviceId(),
         deviceKey: `device-${randomUUID()}`,
         deviceSecretHash: "test-device-secret-hash",
         name: "Restrict fixture",
@@ -1180,6 +1163,7 @@ integrationDescribe("PostgreSQL schema and session integration", () => {
     });
     const device = await prisma.device.create({
       data: {
+        id: createTestDeviceId(),
         deviceKey: `device-${randomUUID()}`,
         deviceSecretHash: "initial-device-secret-hash",
         name: "Redeem fixture",
@@ -1286,6 +1270,7 @@ integrationDescribe("PostgreSQL schema and session integration", () => {
     const storeId = await createStore();
     const first = await prisma.device.create({
       data: {
+        id: createTestDeviceId(),
         deviceKey: `device-${randomUUID()}`,
         deviceSecretHash: "initial-device-secret-hash",
         name: "First unique-key fixture",
@@ -1294,6 +1279,7 @@ integrationDescribe("PostgreSQL schema and session integration", () => {
     });
     const second = await prisma.device.create({
       data: {
+        id: createTestDeviceId(),
         deviceKey: `device-${randomUUID()}`,
         deviceSecretHash: "initial-device-secret-hash",
         name: "Second unique-key fixture",
@@ -1341,6 +1327,7 @@ integrationDescribe("PostgreSQL schema and session integration", () => {
     });
     const device = await prisma.device.create({
       data: {
+        id: createTestDeviceId(),
         deviceKey: `device-${randomUUID()}`,
         deviceSecretHash: "initial-device-secret-hash",
         name: "Attempt fixture",

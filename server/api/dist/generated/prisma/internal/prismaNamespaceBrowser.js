@@ -45,14 +45,13 @@ export const ModelName = {
     AppInstallation: 'AppInstallation',
     Session: 'Session',
     StoreMembership: 'StoreMembership',
+    StoreInvitation: 'StoreInvitation',
     OperatorGrant: 'OperatorGrant',
     AccountToken: 'AccountToken',
     Device: 'Device',
     ProvisioningSession: 'ProvisioningSession',
     DeviceClaimSession: 'DeviceClaimSession',
     DeviceEvent: 'DeviceEvent',
-    Staff: 'Staff',
-    StaffPushToken: 'StaffPushToken',
     DeviceNotification: 'DeviceNotification',
     NotificationWorkerHeartbeat: 'NotificationWorkerHeartbeat'
 };
@@ -137,6 +136,20 @@ export const StoreMembershipScalarFieldEnum = {
     updatedAt: 'updatedAt',
     revokedAt: 'revokedAt'
 };
+export const StoreInvitationScalarFieldEnum = {
+    id: 'id',
+    storeId: 'storeId',
+    inviterAccountId: 'inviterAccountId',
+    recipientEmailNormalized: 'recipientEmailNormalized',
+    tokenHash: 'tokenHash',
+    status: 'status',
+    role: 'role',
+    expiresAt: 'expiresAt',
+    acceptedAt: 'acceptedAt',
+    revokedAt: 'revokedAt',
+    createdAt: 'createdAt',
+    updatedAt: 'updatedAt'
+};
 export const OperatorGrantScalarFieldEnum = {
     id: 'id',
     accountId: 'accountId',
@@ -220,30 +233,9 @@ export const DeviceEventScalarFieldEnum = {
     rssiDbm: 'rssiDbm',
     payload: 'payload'
 };
-export const StaffScalarFieldEnum = {
-    id: 'id',
-    name: 'name',
-    email: 'email',
-    phone: 'phone',
-    isActive: 'isActive',
-    storeId: 'storeId',
-    createdAt: 'createdAt',
-    updatedAt: 'updatedAt'
-};
-export const StaffPushTokenScalarFieldEnum = {
-    id: 'id',
-    token: 'token',
-    platform: 'platform',
-    isActive: 'isActive',
-    lastSeenAt: 'lastSeenAt',
-    staffId: 'staffId',
-    createdAt: 'createdAt',
-    updatedAt: 'updatedAt'
-};
 export const DeviceNotificationScalarFieldEnum = {
     id: 'id',
     eventId: 'eventId',
-    pushTokenId: 'pushTokenId',
     appInstallationId: 'appInstallationId',
     status: 'status',
     attempts: 'attempts',

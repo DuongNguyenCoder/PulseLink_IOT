@@ -1,6 +1,7 @@
 import { Prisma } from "../../generated/prisma/client.js";
 import { generateOperationalToken, hashDeviceToken, } from "../provisioning/provisioning-crypto.js";
 import { writeAuditEvent } from "../../shared/audit.js";
+import { isMacDerivedDeviceId } from "./device-identity.js";
 export class DeviceAuthorizationError extends Error {
     statusCode;
     constructor(message, statusCode) {
@@ -33,6 +34,9 @@ async function requireOwner(db, accountId, storeId) {
         throw new DeviceAuthorizationError("Resource not found", 404);
 }
 export async function createDeviceForOwner(db, accountId, storeId, input, requestId) {
+    if (!isMacDerivedDeviceId(input.deviceId)) {
+        throw new DeviceAuthorizationError("Invalid MAC-derived Device ID", 400);
+    }
     await requireOwner(db, accountId, storeId);
     try {
         return await db.$transaction(async (tx) => {
@@ -40,6 +44,7 @@ export async function createDeviceForOwner(db, accountId, storeId, input, reques
             const deviceKey = generateOperationalToken();
             const device = await tx.device.create({
                 data: {
+                    id: input.deviceId,
                     deviceKey,
                     deviceSecretHash: hashDeviceToken(generateOperationalToken()),
                     name: input.name,

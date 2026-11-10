@@ -339,6 +339,7 @@ export async function createRuntimeOptions(): Promise<BuildAppOptions> {
     auth: {
       emailSender,
       signingKey: jwt.signingKey,
+      verificationKeys: jwt.verificationKeys,
       passwordResetRateLimiter,
       loginRateLimiter,
       fcmKeys,
@@ -350,6 +351,5 @@ export async function createRuntimeOptions(): Promise<BuildAppOptions> {
       verificationKeys: jwt.verificationKeys,
       operatorEnrollmentEnabled: env.OPERATOR_ENROLLMENT_ENABLED,
     },
-    notificationRecipientMode: env.NOTIFICATION_RECIPIENT_MODE,
   };
 }

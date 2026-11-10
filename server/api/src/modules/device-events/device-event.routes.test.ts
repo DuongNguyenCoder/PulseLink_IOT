@@ -40,7 +40,7 @@ describe("device event route", () => {
               payload: null,
             }),
           },
-          staffPushToken: { findMany: async () => [] },
+          appInstallation: { findMany: async () => [] },
           deviceNotification: { createMany: async () => ({ count: 0 }) },
         }),
     } as unknown as PrismaClient;
@@ -67,7 +67,7 @@ describe("device event route", () => {
     await app.close();
   });
 
-  it("uses Account/Membership/AppInstallation recipients in account mode", async () => {
+  it("uses Account/Membership/AppInstallation recipients", async () => {
     let notificationData: unknown;
     const app = Fastify();
     const fakePrisma = {
@@ -103,7 +103,6 @@ describe("device event route", () => {
               payload: null,
             }),
           },
-          staffPushToken: { findMany: async () => [] },
           appInstallation: {
             findMany: async () => [{ id: "installation-account-mode" }],
           },
@@ -118,7 +117,6 @@ describe("device event route", () => {
     app.decorate("prisma", fakePrisma);
     await app.register(deviceEventRoutes, {
       prefix: "/v1",
-      recipientMode: "account",
     });
 
     const response = await app.inject({

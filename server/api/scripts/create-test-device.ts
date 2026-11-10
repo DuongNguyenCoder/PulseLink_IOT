@@ -53,6 +53,7 @@ async function main(): Promise<void> {
 
   const device = await prisma.device.create({
     data: {
+      id: process.env.TEST_DEVICE_ID ?? `pl-${randomBytes(6).toString("hex")}`,
       deviceKey: process.env.TEST_DEVICE_KEY ?? `postman-test-device-${suffix}`,
       deviceSecretHash: hashToken(requiredDeviceToken),
       name: process.env.TEST_DEVICE_NAME ?? `Postman Test Device ${suffix}`,

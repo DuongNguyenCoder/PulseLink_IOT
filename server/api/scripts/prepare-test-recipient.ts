@@ -18,17 +18,24 @@ async function main(): Promise<void> {
   if (store === null || !store.isActive) throw new Error("TEST_STORE_ID must identify an active test Store");
 
   const suffix = randomBytes(5).toString("hex");
-  const staff = await prisma.staff.create({
+  const account = await prisma.account.create({
     data: {
-      storeId: store.id,
-      name: `FCM Test Recipient ${suffix}`,
-      email: `fcm-test-${suffix}@example.invalid`,
-      isActive: true,
+      emailNormalized: `fcm-test-${suffix}@example.invalid`,
+      passwordHash: "integration-test-hash",
+      status: "ACTIVE",
+      emailVerifiedAt: new Date(),
     },
-    select: { id: true, storeId: true, name: true },
+    select: { id: true },
+  });
+  await prisma.storeMembership.create({
+    data: { accountId: account.id, storeId: store.id, role: "STAFF", status: "ACTIVE" },
+  });
+  const installation = await prisma.appInstallation.create({
+    data: { accountId: account.id, platform: "ANDROID" },
+    select: { id: true },
   });
 
-  process.stdout.write(`${JSON.stringify({ storeId: staff.storeId, staffId: staff.id, name: staff.name })}\n`);
+  process.stdout.write(`${JSON.stringify({ storeId: store.id, accountId: account.id, installationId: installation.id })}\n`);
 }
 
 try {

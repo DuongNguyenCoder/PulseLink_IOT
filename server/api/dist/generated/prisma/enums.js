@@ -74,6 +74,12 @@ export const MembershipStatus = {
     SUSPENDED: 'SUSPENDED',
     REVOKED: 'REVOKED'
 };
+export const StoreInvitationStatus = {
+    PENDING: 'PENDING',
+    ACCEPTED: 'ACCEPTED',
+    EXPIRED: 'EXPIRED',
+    REVOKED: 'REVOKED'
+};
 export const OperatorGrantStatus = {
     ACTIVE: 'ACTIVE',
     REVOKED: 'REVOKED'

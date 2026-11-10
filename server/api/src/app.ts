@@ -21,6 +21,7 @@ import {
 import { deviceEventRoutes } from "./modules/device-events/device-event.routes.js";
 import { deviceRoutes } from "./modules/devices/device.routes.js";
 import { deviceStatusRoutes } from "./modules/device-status/device-status.routes.js";
+import { invitationRoutes } from "./modules/invitations/invitation.routes.js";
 import { createOperatorEnrollmentAuthorizer } from "./modules/provisioning/operator-authorization.js";
 import {
   emailVerificationRoutes,
@@ -36,7 +37,6 @@ export interface BuildAppOptions {
   stores: StoreRouteOptions;
   installations: InstallationRouteOptions;
   provisioning: ProvisioningRouteOptions;
-  notificationRecipientMode?: "legacy" | "account";
   close?: () => Promise<void>;
 }
 
@@ -108,10 +108,12 @@ export async function buildApp(options: BuildAppOptions) {
   });
   await app.register(deviceEventRoutes, {
     prefix: "/v1",
-    recipientMode:
-      options.notificationRecipientMode ?? env.NOTIFICATION_RECIPIENT_MODE,
   });
   await app.register(deviceStatusRoutes, { prefix: "/v1" });
+  await app.register(invitationRoutes, {
+    prefix: "/v1",
+    verificationKeys: options.stores.verificationKeys,
+  });
   app.addHook("onClose", async () => {
     await options.close?.();
   });

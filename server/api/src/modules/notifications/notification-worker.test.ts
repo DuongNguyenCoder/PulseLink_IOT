@@ -13,8 +13,7 @@ import {
 const job: ClaimedNotificationJob = {
   id: "notification-1",
   eventId: "event-1",
-  pushTokenId: "token-1",
-  appInstallationId: null,
+  appInstallationId: "installation-1",
   token: "opaque-test-token",
   tokenFingerprint: null,
   eventType: "BUTTON_PRESSED",
@@ -26,7 +25,6 @@ class FakeRepository implements NotificationJobRepository {
   sent: Array<{ id: string; messageId: string }> = [];
   retries: Array<{ id: string; nextAttemptAt: Date; reason: string }> = [];
   failed: Array<{ id: string; reason: string }> = [];
-  deactivated: string[] = [];
   revalidate?: NotificationJobRepository["revalidate"];
   cancel?: NotificationJobRepository["cancel"];
   invalidateInstallationToken?: NotificationJobRepository["invalidateInstallationToken"];
@@ -53,9 +51,6 @@ class FakeRepository implements NotificationJobRepository {
     this.failed.push({ id, reason });
   }
 
-  async deactivateToken(pushTokenId: string): Promise<void> {
-    this.deactivated.push(pushTokenId);
-  }
 }
 
 class FakeSender implements FcmSender {
@@ -130,7 +125,6 @@ describe("notification worker", () => {
     );
 
     await worker.processOnce();
-    expect(repository.deactivated).toEqual(["token-1"]);
     expect(repository.failed).toEqual([
       { id: "notification-1", reason: "invalid_fcm_token" },
     ]);
@@ -159,7 +153,7 @@ describe("notification worker", () => {
     const repository = new FakeRepository();
     repository.claimed = [
       job,
-      { ...job, id: "notification-2", pushTokenId: "token-2" },
+      { ...job, id: "notification-2" },
     ];
     let calls = 0;
     const sender: FcmSender = {
@@ -199,7 +193,6 @@ describe("notification worker", () => {
     repository.claimed = [
       {
         ...job,
-        pushTokenId: null,
         appInstallationId: "installation-1",
       },
     ];
@@ -225,7 +218,6 @@ describe("notification worker", () => {
     repository.claimed = [
       {
         ...job,
-        pushTokenId: null,
         appInstallationId: "installation-1",
       },
     ];
@@ -249,6 +241,5 @@ describe("notification worker", () => {
       "fingerprint-1",
       expect.any(Date),
     ]);
-    expect(repository.deactivated).toHaveLength(0);
   });
 });

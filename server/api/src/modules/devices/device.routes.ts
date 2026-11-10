@@ -7,10 +7,12 @@ import {
   createDeviceForOwner,
   listDevicesForOwner,
 } from "./device.service.js";
+import { isMacDerivedDeviceId } from "./device-identity.js";
 
 const storeParams = z.object({ storeId: z.string().min(1).max(128) });
 const createDeviceBody = z
   .object({
+    deviceId: z.string().refine(isMacDerivedDeviceId, "Invalid MAC-derived Device ID"),
     name: z.string().trim().min(1).max(120),
     firmwareVersion: z.string().trim().min(1).max(40).optional(),
   })

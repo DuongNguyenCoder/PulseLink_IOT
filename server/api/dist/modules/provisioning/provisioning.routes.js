@@ -2,6 +2,7 @@ import { z } from "zod";
 import { createAuthenticationHook } from "../auth/auth-hook.js";
 import { cancelProvisioningSession, createProvisioningSession, enrollDevice, getProvisioningSession, listProvisioningSessions, redeemProvisioningSession, revokeDeviceEnrollment, ProvisioningError, } from "./provisioning.service.js";
 import { completeDeviceClaim, createDeviceClaimSession, } from "./device-claim.service.js";
+import { isMacDerivedDeviceId } from "../devices/device-identity.js";
 const storeParams = z.object({ storeId: z.string().min(1).max(128) });
 const sessionParams = z.object({
     storeId: z.string().min(1).max(128),
@@ -14,7 +15,7 @@ const deviceSessionParams = z.object({
 });
 const deviceClaimParams = z.object({ storeId: z.string().min(1).max(128), claimSessionId: z.string().min(1).max(128) });
 const createDeviceClaimBody = z.object({
-    deviceId: z.string().regex(/^[A-Za-z0-9_-]{8,128}$/),
+    deviceId: z.string().refine(isMacDerivedDeviceId, "Invalid MAC-derived Device ID"),
     name: z.string().trim().min(1).max(120),
 }).strict();
 const completeDeviceClaimBody = z.object({
@@ -25,7 +26,7 @@ const completeDeviceClaimBody = z.object({
     signatureDerBase64: z.string().min(12).max(108).regex(/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/),
 }).strict();
 const createSessionBody = z.object({
-    deviceId: z.string().min(1).max(128),
+    deviceId: z.string().refine(isMacDerivedDeviceId, "Invalid MAC-derived Device ID"),
     idempotencyKey: z.string().min(16).max(128),
 });
 const enrollmentBody = z.object({

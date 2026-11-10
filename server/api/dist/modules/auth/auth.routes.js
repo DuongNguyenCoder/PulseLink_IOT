@@ -8,6 +8,7 @@ import { normalizeEmail } from "./email.js";
 import { authenticateWithInstallation, } from "./authentication-bootstrap.service.js";
 import { EmailDeliveryError } from "./email-sender.js";
 import { getSafeErrorLogFields } from "../../shared/logging.js";
+import { createAuthenticationHook } from "./auth-hook.js";
 const credentialsSchema = z.object({
     email: z.string().min(3).max(254),
     password: z.string().min(8).max(256),
@@ -35,6 +36,25 @@ const resetConsumeSchema = z.object({
     newPassword: z.string().min(8).max(256),
 });
 export const authRoutes = async (app, options) => {
+    if (options.verificationKeys !== undefined) {
+        app.get("/me", { preHandler: createAuthenticationHook(options.verificationKeys) }, async (request, reply) => {
+            const account = await app.prisma.account.findUnique({
+                where: { id: request.auth.accountId },
+                select: { id: true, emailNormalized: true, status: true, emailVerifiedAt: true },
+            });
+            if (account === null)
+                throw new AccountAuthError("Authentication required", 401);
+            return reply.send({
+                data: {
+                    id: account.id,
+                    email: account.emailNormalized,
+                    status: account.status,
+                    emailVerifiedAt: account.emailVerifiedAt,
+                },
+                meta: { requestId: request.id },
+            });
+        });
+    }
     app.post("/signup", async (request, reply) => {
         try {
             const startedAt = performance.now();

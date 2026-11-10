@@ -96,6 +96,13 @@ enum MembershipStatus {
   REVOKED
 }
 
+enum StoreInvitationStatus {
+  PENDING
+  ACCEPTED
+  EXPIRED
+  REVOKED
+}
+
 enum OperatorGrantStatus {
   ACTIVE
   REVOKED
@@ -123,7 +130,7 @@ enum AccountTokenPurpose {
 
 // ================================
 // STORE
-// Một cửa hàng có nhiều thiết bị và nhân viên
+// Một cửa hàng có nhiều thiết bị và Account thành viên
 // ================================
 
 model Store {
@@ -136,8 +143,8 @@ model Store {
   updatedAt DateTime @updatedAt
 
   devices              Device[]
-  staff                Staff[]
   memberships          StoreMembership[]
+  invitations           StoreInvitation[]
   auditEvents          AuditEvent[]
   provisioningSessions ProvisioningSession[]
   deviceClaimSessions DeviceClaimSession[]
@@ -170,8 +177,8 @@ model AuditEvent {
 
 // ================================
 // ACCOUNT
-// Owner identity. Staff membership is future scope; do not infer Account rows
-// from the legacy Staff table without an explicit, audited mapping.
+// Authenticated user identity. Store participation is represented by
+// StoreMembership is the authoritative Store relationship.
 // ================================
 
 model Account {
@@ -188,6 +195,7 @@ model Account {
   installations        AppInstallation[]
   sessions             Session[]
   memberships          StoreMembership[]
+  sentInvitations      StoreInvitation[] @relation("StoreInvitationInviter")
   tokens               AccountToken[]
   provisioningSessions ProvisioningSession[]
   deviceClaimSessions DeviceClaimSession[]
@@ -283,6 +291,30 @@ model StoreMembership {
   @@index([storeId, status, role])
 }
 
+// Invitation is intentionally separate from StoreMembership. A pending
+// invitation grants no Store access until the intended Account accepts it.
+model StoreInvitation {
+  id                    String                 @id @default(cuid())
+  storeId               String
+  inviterAccountId      String
+  recipientEmailNormalized String               @db.VarChar(254)
+  tokenHash             String                 @unique @db.VarChar(64)
+  status                StoreInvitationStatus @default(PENDING)
+  role                  MembershipRole        @default(STAFF)
+  expiresAt             DateTime
+  acceptedAt            DateTime?
+  revokedAt             DateTime?
+  createdAt             DateTime               @default(now())
+  updatedAt             DateTime               @updatedAt
+
+  store   Store   @relation(fields: [storeId], references: [id], onDelete: Restrict)
+  inviter Account @relation("StoreInvitationInviter", fields: [inviterAccountId], references: [id], onDelete: Restrict)
+
+  @@index([storeId, status, createdAt])
+  @@index([storeId, recipientEmailNormalized, status])
+  @@index([status, expiresAt])
+}
+
 // Store-scoped operator capability. Grant provisioning remains controlled;
 // this model does not imply a public self-service grant endpoint.
 model OperatorGrant {
@@ -332,7 +364,7 @@ model AccountToken {
 // ================================
 
 model Device {
-  id                   String                  @id @default(cuid())
+  id                   String                  @id
   deviceKey            String                  @unique @db.VarChar(64)
   deviceSecretHash     String                  @db.VarChar(255)
   name                 String                  @db.VarChar(120)
@@ -440,56 +472,13 @@ model DeviceEvent {
 }
 
 // ================================
-// STAFF
-// Nhân viên thuộc một cửa hàng
-// ================================
-
-model Staff {
-  id        String   @id @default(cuid())
-  name      String   @db.VarChar(120)
-  email     String?  @unique @db.VarChar(254)
-  phone     String?  @db.VarChar(20)
-  isActive  Boolean  @default(true)
-  storeId   String
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  store      Store            @relation(fields: [storeId], references: [id], onDelete: Restrict)
-  pushTokens StaffPushToken[]
-
-  @@index([storeId, isActive])
-}
-
-// ================================
-// STAFF PUSH TOKEN
-// Token thiết bị nhận thông báo FCM
-// ================================
-
-model StaffPushToken {
-  id         String       @id @default(cuid())
-  token      String       @unique @db.VarChar(2048)
-  platform   PushPlatform
-  isActive   Boolean      @default(true)
-  lastSeenAt DateTime?
-  staffId    String
-  createdAt  DateTime     @default(now())
-  updatedAt  DateTime     @updatedAt
-
-  staff         Staff                @relation(fields: [staffId], references: [id], onDelete: Restrict)
-  notifications DeviceNotification[]
-
-  @@index([staffId, isActive])
-}
-
-// ================================
 // DEVICE NOTIFICATION
-// Theo dõi việc gửi thông báo cho từng token
+// Account-centric runtime jobs target appInstallationId.
 // ================================
 
 model DeviceNotification {
   id            String             @id @default(cuid())
   eventId       String
-  pushTokenId   String?
   appInstallationId String?
   status        NotificationStatus @default(PENDING)
   attempts      Int                @default(0)
@@ -502,11 +491,8 @@ model DeviceNotification {
   updatedAt     DateTime           @updatedAt
 
   event          DeviceEvent     @relation(fields: [eventId], references: [id], onDelete: Restrict)
-  pushToken      StaffPushToken? @relation(fields: [pushTokenId], references: [id], onDelete: Restrict)
   appInstallation AppInstallation? @relation(fields: [appInstallationId], references: [id], onDelete: Restrict)
 
-  // Một sự kiện không tạo hai bản ghi gửi cho cùng một token
-  @@unique([eventId, pushTokenId])
   @@unique([eventId, appInstallationId])
   @@index([appInstallationId])
   @@index([status, nextAttemptAt])
