@@ -883,12 +883,12 @@ integrationDescribe("PostgreSQL schema and session integration", () => {
     const options = { concurrency: 1, leaseMs: 5_000, pollMs: 1 };
     const results = await Promise.all([
       new NotificationWorker(
-        new PrismaNotificationJobRepository(prisma),
+        new PrismaNotificationJobRepository(prisma, fcmKeys),
         sender,
         options,
       ).processOnce(),
       new NotificationWorker(
-        new PrismaNotificationJobRepository(prisma),
+        new PrismaNotificationJobRepository(prisma, fcmKeys),
         sender,
         options,
       ).processOnce(),
@@ -941,7 +941,7 @@ integrationDescribe("PostgreSQL schema and session integration", () => {
     };
     eventIds.add(input.eventId);
     const accepted = await ingestDeviceEvent(prisma as never, token, input);
-    const repository = new PrismaNotificationJobRepository(prisma);
+    const repository = new PrismaNotificationJobRepository(prisma, fcmKeys);
     const firstNow = new Date();
     const first = await repository.claim(
       1,

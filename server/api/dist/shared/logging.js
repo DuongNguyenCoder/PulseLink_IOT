@@ -27,10 +27,31 @@ export function getSafeErrorLogFields(error) {
         return { errorType: typeof error };
     }
     const candidate = error;
+    const meta = typeof candidate.meta === "object" && candidate.meta !== null
+        ? candidate.meta
+        : undefined;
+    const metaCode = typeof meta?.code === "string"
+        ? meta.code
+        : typeof meta?.driverAdapterError?.cause?.originalCode === "string"
+            ? meta.driverAdapterError.cause.originalCode
+            : undefined;
+    const metaMessage = typeof meta?.message === "string"
+        ? meta.message
+        : typeof meta?.driverAdapterError?.cause?.originalMessage === "string"
+            ? meta.driverAdapterError.cause.originalMessage
+            : undefined;
     return {
         errorType: typeof candidate.name === "string" ? candidate.name : "UnknownError",
         ...(typeof candidate.code === "string"
             ? { errorCode: candidate.code }
+            : {}),
+        ...(typeof candidate.message === "string"
+            ? { errorMessage: candidate.message }
+            : {}),
+        ...(metaCode === undefined ? {} : { errorMetaCode: metaCode }),
+        ...(metaMessage === undefined ? {} : { errorMetaMessage: metaMessage }),
+        ...(typeof candidate.stack === "string"
+            ? { errorStack: candidate.stack }
             : {}),
         ...(typeof candidate.statusCode === "number"
             ? { statusCode: candidate.statusCode }

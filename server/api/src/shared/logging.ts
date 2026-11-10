@@ -26,6 +26,10 @@ export const REDACTED_LOG_PATHS = [
 export function getSafeErrorLogFields(error: unknown): {
   errorType: string;
   errorCode?: string;
+  errorMessage?: string;
+  errorMetaCode?: string;
+  errorMetaMessage?: string;
+  errorStack?: string;
   statusCode?: number;
   deliveryOutcome?: "not-sent" | "unknown";
   deliveryCode?: string;
@@ -37,16 +41,50 @@ export function getSafeErrorLogFields(error: unknown): {
   const candidate = error as {
     name?: unknown;
     code?: unknown;
+    message?: unknown;
+    meta?: unknown;
+    stack?: unknown;
     statusCode?: unknown;
     deliveryOutcome?: unknown;
     deliveryCode?: unknown;
   };
+
+  const meta =
+    typeof candidate.meta === "object" && candidate.meta !== null
+      ? (candidate.meta as {
+          code?: unknown;
+          message?: unknown;
+          driverAdapterError?: {
+            cause?: { originalCode?: unknown; originalMessage?: unknown };
+          };
+        })
+      : undefined;
+  const metaCode =
+    typeof meta?.code === "string"
+      ? meta.code
+      : typeof meta?.driverAdapterError?.cause?.originalCode === "string"
+        ? meta.driverAdapterError.cause.originalCode
+        : undefined;
+  const metaMessage =
+    typeof meta?.message === "string"
+      ? meta.message
+      : typeof meta?.driverAdapterError?.cause?.originalMessage === "string"
+        ? meta.driverAdapterError.cause.originalMessage
+        : undefined;
 
   return {
     errorType:
       typeof candidate.name === "string" ? candidate.name : "UnknownError",
     ...(typeof candidate.code === "string"
       ? { errorCode: candidate.code }
+      : {}),
+    ...(typeof candidate.message === "string"
+      ? { errorMessage: candidate.message }
+      : {}),
+    ...(metaCode === undefined ? {} : { errorMetaCode: metaCode }),
+    ...(metaMessage === undefined ? {} : { errorMetaMessage: metaMessage }),
+    ...(typeof candidate.stack === "string"
+      ? { errorStack: candidate.stack }
       : {}),
     ...(typeof candidate.statusCode === "number"
       ? { statusCode: candidate.statusCode }

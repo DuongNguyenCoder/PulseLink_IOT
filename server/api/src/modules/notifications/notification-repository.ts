@@ -79,8 +79,8 @@ export class PrismaNotificationJobRepository implements NotificationJobRepositor
               WHERE ai."id" = n."appInstallationId" AND ai."status" = 'ACTIVE'::"AppInstallationStatus"
                 AND ai."fcmTokenCiphertext" IS NOT NULL AND ai."fcmTokenFingerprint" IS NOT NULL
                 AND a."status" = 'ACTIVE'::"AccountStatus" AND sm."status" = 'ACTIVE'::"MembershipStatus"
-                AND sm."role" IN ('OWNER'::"MembershipRole", 'STAFF'::"MembershipRole")))
-        ORDER BY n."nextAttemptAt", n."createdAt" FOR UPDATE SKIP LOCKED LIMIT ${limit}
+                AND sm."role" IN ('OWNER'::"MembershipRole", 'STAFF'::"MembershipRole"))
+        ORDER BY n."nextAttemptAt", n."createdAt" LIMIT ${limit} FOR UPDATE SKIP LOCKED
       ), claimed AS (
         UPDATE "DeviceNotification" n
         SET "status" = 'PROCESSING'::"NotificationStatus", "attempts" = n."attempts" + 1,
