@@ -31,6 +31,19 @@ static void test_retry_path_is_bounded_by_terminal_failure(void) {
     assert(!commissioning_transition(&context, COMMISSIONING_ONLINE));
 }
 
+static void test_incomplete_handshake_can_return_to_bounded_softap(void) {
+    commissioning_context_t context;
+    commissioning_init(&context);
+    assert(commissioning_begin(&context, 100U, COMMISSIONING_PAIRING_WINDOW_MS));
+    assert(commissioning_accept_physical(&context, 200U));
+    assert(commissioning_transition(&context, COMMISSIONING_RECEIVING_CONFIG));
+    assert(commissioning_retry_handshake(&context));
+    assert(commissioning_state(&context) == COMMISSIONING_SOFTAP_ACTIVE);
+    assert(commissioning_transition(&context, COMMISSIONING_RECEIVING_CONFIG));
+    assert(commissioning_transition(&context, COMMISSIONING_CONNECTING_TO_WIFI));
+    assert(!commissioning_retry_handshake(&context));
+}
+
 static void test_invalid_order_and_cancel(void) {
     commissioning_context_t context;
     commissioning_init(&context);
@@ -100,6 +113,7 @@ static void test_backend_recovery_is_bounded_and_starts_before_online(void) {
 int main(void) {
     test_happy_path_and_consume_once();
     test_retry_path_is_bounded_by_terminal_failure();
+    test_incomplete_handshake_can_return_to_bounded_softap();
     test_invalid_order_and_cancel();
     test_expiry_and_wrap_safe_deadline();
     test_pairing_window_outlives_physical_press_window();

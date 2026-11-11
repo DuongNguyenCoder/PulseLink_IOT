@@ -24,6 +24,16 @@ bool commissioning_backend_reachability_init(
     return true;
 }
 
+void commissioning_backend_reachability_set_authenticated_callback(
+    commissioning_backend_reachability_t *reachability,
+    commissioning_backend_authenticated_t callback,
+    void *context
+) {
+    if (reachability == NULL) return;
+    reachability->authenticated = callback;
+    reachability->authenticated_context = context;
+}
+
 bool commissioning_backend_reachability_start(
     commissioning_backend_reachability_t *reachability,
     uint32_t generation
@@ -60,6 +70,8 @@ void commissioning_backend_reachability_complete(
     if (result == COMMISSIONING_BACKEND_PROBE_OK) {
         if (!commissioning_wifi_controller_mark_backend_online(reachability->wifi_controller, generation)) {
             (void)commissioning_wifi_controller_fail(reachability->wifi_controller, generation);
+        } else if (reachability->authenticated != NULL) {
+            reachability->authenticated(reachability->authenticated_context);
         }
     } else if (!commissioning_wifi_controller_is_backend_recovery(reachability->wifi_controller) ||
         result == COMMISSIONING_BACKEND_PROBE_AUTH_FAILURE ||

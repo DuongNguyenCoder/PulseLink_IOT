@@ -5,7 +5,16 @@ backend/provisioning.
 
 ## Cấu hình an toàn
 
-Trong `idf.py menuconfig` chọn **PulseLink firmware** và nhập:
+Mở `menuconfig` cho profile `default` một cách tường minh (từ `firmware/esp32`):
+
+```powershell
+idf.py -B build/profiles/default `
+  -D "SDKCONFIG=$((Join-Path (Get-Location) 'build/profiles/default/sdkconfig'))" `
+  -D "SDKCONFIG_DEFAULTS=$((Join-Path (Get-Location) 'sdkconfig.defaults'))" menuconfig
+```
+
+Trong **PulseLink firmware**, nhập SSID/password chỉ vào
+`build/profiles/default/sdkconfig`:
 
 - `Wi-Fi SSID`
 - `Wi-Fi password`
@@ -19,16 +28,18 @@ Board mục tiêu là ESP32-S3, chỉ dùng mạng Wi-Fi 2,4 GHz cho smoke test.
 
 ```powershell
 cd firmware/esp32
-idf.py build
-idf.py -p COM7 flash monitor
+..\..\scripts\Build-FirmwareProfile.ps1 -Profile default
 ```
 
-Thay `COM7` bằng port thực tế. Có thể tách riêng các bước:
+Flash là bước riêng, hiển thị hash và yêu cầu xác nhận:
 
 ```powershell
-idf.py -p COM7 flash
-idf.py -p COM7 monitor -B 115200
+..\..\scripts\Flash-FirmwareProfile.ps1 -Profile default -Port COM7
 ```
+
+Thay `COM7` bằng port đã xác minh. Chỉ sau khi xác nhận đúng board mới mở
+monitor bằng `idf.py -B build/profiles/default -p COM7 monitor -B 115200`.
+Không dùng plain `idf.py build` hoặc `idf.py flash`.
 
 Log mong đợi:
 

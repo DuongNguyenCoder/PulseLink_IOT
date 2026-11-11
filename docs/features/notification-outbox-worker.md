@@ -1,14 +1,14 @@
 # Transactional notification outbox and worker
 
-## MVP recipient source
+## Account-centric recipient source
 
-The MVP uses active `StaffPushToken` rows whose `Staff` is active and belongs to the device's Store. `AppInstallation` is not used by this pipeline: its FCM value is encrypted and it has no `DeviceNotification` recipient relation yet. This avoids duplicate delivery and avoids treating an encrypted installation record as a sendable token.
+The runtime uses active `AppInstallation` rows whose Account is active and has an active `StoreMembership` for the Device's Store. FCM values remain encrypted at rest and are decrypted only by the worker. The legacy Staff schema has been retired and is not a recipient or push destination.
 
 ## Event transaction
 
-`POST /v1/device-events` authenticates the device and, for a new event, runs the `DeviceEvent` insert and `DeviceNotification` inserts in one PostgreSQL transaction. Each eligible `StaffPushToken` is snapshotted into one durable job. A duplicate event is resolved by the existing unique `eventId` invariant and creates no new jobs. FCM is never called by the HTTP request.
+`POST /v1/device-events` authenticates the device and, for a new event, runs the `DeviceEvent` insert and `DeviceNotification` inserts in one PostgreSQL transaction. Each eligible Account installation is snapshotted into one durable job. A duplicate event is resolved by the existing unique `eventId` invariant and creates no new jobs. FCM is never called by the HTTP request.
 
-If a Store has no eligible staff token, the event is still durably accepted and zero jobs are created. The worker is independent of the request lifecycle.
+If a Store has no eligible Account installation, the event is still durably accepted and zero jobs are created. The worker is independent of the request lifecycle.
 
 ## Worker claiming and retry
 
@@ -20,7 +20,9 @@ npm run worker
 
 The worker claims `PENDING` jobs and expired `PROCESSING` leases using PostgreSQL `FOR UPDATE SKIP LOCKED`. A claim increments `attempts` and sets a lease. If the process crashes, the expired lease can be claimed again. The default worker concurrency is 10 and the default lease is 60 seconds.
 
-Transient FCM failures are rescheduled with bounded exponential backoff and jitter, up to five attempts. Invalid/unregistered tokens are deactivated and their job is marked `FAILED`. Other provider failures are stored as a bounded reason and marked `FAILED`. Delivery is at-least-once: a crash after FCM accepts a message but before the database update can result in a duplicate send; exactly-once delivery is not claimed.
+Transient FCM failures are rescheduled with bounded exponential backoff and jitter, up to five attempts. Invalid/unregistered installation tokens mark the `AppInstallation` invalid and their job `FAILED`. Other provider failures are stored as a bounded reason and marked `FAILED`. Delivery is at-least-once: a crash after FCM accepts a message but before the database update can result in a duplicate send; exactly-once delivery is not claimed.
+
+Historical legacy jobs were cancelled during the previous runtime retirement. New notification rows always target `appInstallationId`; no legacy token is read or sent.
 
 ## FCM configuration
 

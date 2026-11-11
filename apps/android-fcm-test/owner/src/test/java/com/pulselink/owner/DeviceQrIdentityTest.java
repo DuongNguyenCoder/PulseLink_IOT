@@ -6,21 +6,21 @@ import static org.junit.Assert.assertNull;
 
 public final class DeviceQrIdentityTest {
     @Test public void parsesRawDeviceIdAndVersionedIdentityUri() {
-        assertEquals("clx1234567890abcdefghijk", DeviceQrIdentity.parse("clx1234567890abcdefghijk"));
-        assertEquals("clx1234567890abcdefghijk", DeviceQrIdentity.parse("pulselink://device/v1/clx1234567890abcdefghijk"));
+        assertEquals("pl-0123456789ab", DeviceQrIdentity.parse("pl-0123456789ab"));
+        assertEquals("pl-0123456789ab", DeviceQrIdentity.parse("pulselink://device/v1/pl-0123456789ab"));
     }
 
     @Test public void rejectsSecretBearingOrAmbiguousPayloads() {
         assertNull(DeviceQrIdentity.parse(null));
-        assertNull(DeviceQrIdentity.parse("https://example.test/device?id=clx1234567890abcdefghijk&token=secret"));
-        assertNull(DeviceQrIdentity.parse("pulselink://device/v1/clx1234567890abcdefghijk?activation=secret"));
+        assertNull(DeviceQrIdentity.parse("https://example.test/device?id=pl-0123456789ab&token=secret"));
+        assertNull(DeviceQrIdentity.parse("pulselink://device/v1/pl-0123456789ab?activation=secret"));
         assertNull(DeviceQrIdentity.parse("clx123"));
-        assertNull(DeviceQrIdentity.parse("clx1234567890abcdefghijk/other"));
+        assertNull(DeviceQrIdentity.parse("pl-0123456789ab/other"));
     }
 
     @Test public void derivesSoftApDiscoveryNameFromPublicMacIdentity() {
         assertEquals("PulseLink-89AB", DeviceQrIdentity.softApSsid("pl-0123456789ab"));
-        assertNull(DeviceQrIdentity.softApSsid("clx1234567890abcdefghijk"));
+        assertNull(DeviceQrIdentity.softApSsid("clx1234567890ab"));
     }
 
     @Test public void claimAcceptsScannedOrManuallyEnteredPublicId() {

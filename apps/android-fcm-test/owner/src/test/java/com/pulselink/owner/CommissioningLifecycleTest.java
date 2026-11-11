@@ -38,4 +38,23 @@ public final class CommissioningLifecycleTest {
         assertTrue(failed.fail());
         assertFalse(failed.transition(CommissioningLifecycle.State.CONNECTING_TO_DEVICE, 1));
     }
+
+    @Test
+    public void unavailableSoftApCanRetryWithoutDiscardingProvisioningSession() {
+        CommissioningLifecycle lifecycle = new CommissioningLifecycle();
+        assertTrue(lifecycle.start(1000, 30_000));
+        assertTrue(lifecycle.transition(CommissioningLifecycle.State.CONNECTING_TO_DEVICE, 1001));
+        assertTrue(lifecycle.retrySoftApConnection(1002));
+        assertEquals(CommissioningLifecycle.State.SESSION_READY, lifecycle.state());
+        assertTrue(lifecycle.transition(CommissioningLifecycle.State.CONNECTING_TO_DEVICE, 1003));
+    }
+
+    @Test
+    public void unavailableSoftApCannotRetryAfterSessionDeadline() {
+        CommissioningLifecycle lifecycle = new CommissioningLifecycle();
+        assertTrue(lifecycle.start(1000, 10));
+        assertTrue(lifecycle.transition(CommissioningLifecycle.State.CONNECTING_TO_DEVICE, 1001));
+        assertFalse(lifecycle.retrySoftApConnection(1010));
+        assertEquals(CommissioningLifecycle.State.EXPIRED, lifecycle.state());
+    }
 }

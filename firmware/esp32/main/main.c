@@ -16,6 +16,7 @@
 #include "commissioning_wifi_mode_policy.h"
 #include "commissioning_startup_policy.h"
 #include "device_event_http_policy.h"
+#include "device_event_queue_policy.h"
 #include "device_identity.h"
 #include "device_provisioning_payload.h"
 #include "esp_device_identity_provider.h"
@@ -39,6 +40,29 @@
 #include "nvs_flash.h"
 #include "sdkconfig.h"
 
+#ifndef PULSELINK_BUILD_PROFILE
+#define PULSELINK_BUILD_PROFILE "unknown"
+#endif
+#ifndef PULSELINK_BUILD_CONFIG_FINGERPRINT
+#define PULSELINK_BUILD_CONFIG_FINGERPRINT "unavailable"
+#endif
+
+#if CONFIG_PULSELINK_COMMISSIONING_ENABLED
+#define PULSELINK_COMMISSIONING_ENABLED_VALUE 1
+#else
+#define PULSELINK_COMMISSIONING_ENABLED_VALUE 0
+#endif
+#if CONFIG_PULSELINK_DEVICE_IDENTITY_NVS_PROVIDER
+#define PULSELINK_IDENTITY_PROVIDER_ENABLED_VALUE 1
+#else
+#define PULSELINK_IDENTITY_PROVIDER_ENABLED_VALUE 0
+#endif
+#if CONFIG_PULSELINK_OPERATIONAL_CREDENTIAL_STORAGE
+#define PULSELINK_CREDENTIAL_STORAGE_ENABLED_VALUE 1
+#else
+#define PULSELINK_CREDENTIAL_STORAGE_ENABLED_VALUE 0
+#endif
+
 #if CONFIG_PULSELINK_COMMISSIONING_ENABLED && CONFIG_PULSELINK_BUTTON_GPIO >= 0 && \
     CONFIG_PULSELINK_BUTTON_GPIO == CONFIG_PULSELINK_COMMISSIONING_BUTTON_GPIO
 #error "Event and commissioning buttons must use distinct GPIOs"
@@ -52,7 +76,9 @@ static EventGroupHandle_t s_wifi_events;
 static SemaphoreHandle_t s_queue_mutex;
 static SemaphoreHandle_t s_wifi_mode_mutex;
 static TaskHandle_t s_sender_task;
+static TaskHandle_t s_button_task;
 static TaskHandle_t s_http_smoke_task;
+static TaskHandle_t s_backend_recovery_task;
 static uint32_t s_disconnect_count;
 
 #define EVENT_QUEUE_KEY "events"
@@ -74,6 +100,53 @@ typedef struct { uint32_t version; queued_event_t events[EVENT_QUEUE_MAX]; } eve
 typedef struct { char body[HTTP_RESPONSE_LIMIT + 1U]; size_t length; } http_response_t;
 static event_queue_t s_event_queue;
 static event_button_t s_event_button;
+
+typedef struct {
+    uint32_t gpio_interrupt_count;
+    uint32_t gpio_press_count;
+    uint32_t event_queue_push_count;
+    uint32_t event_queue_drop_count;
+    uint32_t event_queue_pop_count;
+    uint32_t event_worker_process_count;
+    uint32_t network_ready_count;
+    uint32_t event_send_attempt_count;
+    uint32_t event_send_success_count;
+    uint32_t event_send_fail_count;
+    uint32_t last_event_error;
+    int last_http_status;
+    UBaseType_t sender_stack_min_words;
+    UBaseType_t button_stack_min_words;
+    TickType_t last_summary_at;
+} device_diagnostics_t;
+
+static device_diagnostics_t s_diagnostics;
+
+static void diagnostics_log_summary(TickType_t now) {
+    if ((TickType_t)(now - s_diagnostics.last_summary_at) < pdMS_TO_TICKS(30000)) return;
+    s_diagnostics.last_summary_at = now;
+    s_diagnostics.sender_stack_min_words = uxTaskGetStackHighWaterMark(NULL);
+    s_diagnostics.button_stack_min_words = s_button_task == NULL
+        ? 0U : uxTaskGetStackHighWaterMark(s_button_task);
+    ESP_LOGI(TAG,
+        "diagnostics gpio_interrupt=%lu gpio_presses=%lu queue_push=%lu queue_drop=%lu "
+        "queue_pop=%lu worker_process=%lu network_ready=%lu send_attempt=%lu "
+        "send_success=%lu send_fail=%lu last_error=%lu last_http_status=%d "
+        "sender_stack_min_words=%u button_stack_min_words=%u",
+        (unsigned long)s_diagnostics.gpio_interrupt_count,
+        (unsigned long)s_diagnostics.gpio_press_count,
+        (unsigned long)s_diagnostics.event_queue_push_count,
+        (unsigned long)s_diagnostics.event_queue_drop_count,
+        (unsigned long)s_diagnostics.event_queue_pop_count,
+        (unsigned long)s_diagnostics.event_worker_process_count,
+        (unsigned long)s_diagnostics.network_ready_count,
+        (unsigned long)s_diagnostics.event_send_attempt_count,
+        (unsigned long)s_diagnostics.event_send_success_count,
+        (unsigned long)s_diagnostics.event_send_fail_count,
+        (unsigned long)s_diagnostics.last_event_error,
+        s_diagnostics.last_http_status,
+        (unsigned)s_diagnostics.sender_stack_min_words,
+        (unsigned)s_diagnostics.button_stack_min_words);
+}
 
 static void clear_sensitive(void *value, size_t length) {
     volatile uint8_t *bytes = value;
@@ -151,7 +224,8 @@ static bool commissioning_wifi_connect(void *context) {
 static void commissioning_wifi_disconnect(void *context) {
     (void)context;
     if (s_wifi_mode_mutex == NULL || xSemaphoreTake(s_wifi_mode_mutex, pdMS_TO_TICKS(1000)) != pdTRUE) return;
-    (void)esp_wifi_disconnect();
+    esp_err_t result = esp_wifi_disconnect();
+    ESP_LOGI(TAG, "station disconnect requested result=%s", esp_err_to_name(result));
     xSemaphoreGive(s_wifi_mode_mutex);
 }
 
@@ -180,6 +254,64 @@ static void commissioning_release_wifi_ownership(void) {
     xSemaphoreGive(s_wifi_mode_mutex);
 }
 
+typedef struct {
+    int last_level;
+} commissioning_button_diagnostics_t;
+
+static bool commissioning_confirmation_begin(
+    physical_confirmation_t *confirmation,
+    commissioning_button_diagnostics_t *diagnostics,
+    uint32_t now_ms,
+    const char *path
+) {
+    if (confirmation == NULL || diagnostics == NULL) return false;
+    diagnostics->last_level = gpio_get_level(CONFIG_PULSELINK_COMMISSIONING_BUTTON_GPIO);
+    ESP_LOGI(TAG, "GPIO5 %s gate started initial_level=%s window_ms=%u debounce_ms=%u hold_ms=%u",
+        path, diagnostics->last_level == 0 ? "LOW" : "HIGH",
+        PHYSICAL_CONFIRMATION_WINDOW_MS, PHYSICAL_CONFIRMATION_DEBOUNCE_MS,
+        PHYSICAL_CONFIRMATION_LONG_PRESS_MS);
+    if (diagnostics->last_level == 0) {
+        ESP_LOGW(TAG, "GPIO5 was already LOW at gate start; release it and make a fresh press/release gesture");
+    }
+    return physical_confirmation_start_level(confirmation,
+        diagnostics->last_level == 0, now_ms);
+}
+
+static void commissioning_confirmation_sample(
+    physical_confirmation_t *confirmation,
+    commissioning_button_diagnostics_t *diagnostics,
+    uint32_t now_ms,
+    const char *path
+) {
+    const int level = gpio_get_level(CONFIG_PULSELINK_COMMISSIONING_BUTTON_GPIO);
+    const physical_confirmation_state_t before_state = physical_confirmation_state(confirmation);
+    const bool was_pressing = confirmation->press_in_progress;
+    const uint32_t press_started_at_ms = confirmation->press_started_at_ms;
+    if (level != diagnostics->last_level) {
+        ESP_LOGI(TAG, "GPIO5 %s sampled level=%s elapsed_ms=%u",
+            path, level == 0 ? "LOW" : "HIGH", (unsigned)now_ms);
+        diagnostics->last_level = level;
+    }
+    physical_confirmation_sample_level(confirmation, level, now_ms);
+    const bool is_pressing = confirmation->press_in_progress;
+    const physical_confirmation_state_t after_state = physical_confirmation_state(confirmation);
+    if (!was_pressing && is_pressing) {
+        ESP_LOGI(TAG, "GPIO5 %s debounced press detected at_ms=%u", path, (unsigned)now_ms);
+    } else if (was_pressing && !is_pressing) {
+        const uint32_t hold_ms = (uint32_t)(now_ms - press_started_at_ms);
+        if (after_state == PHYSICAL_CONFIRMATION_ACCEPTED) {
+            ESP_LOGI(TAG, "GPIO5 %s release detected hold_ms=%u gesture=accepted", path, (unsigned)hold_ms);
+        } else {
+            ESP_LOGW(TAG, "GPIO5 %s release detected hold_ms=%u gesture=rejected reason=hold_below_threshold",
+                path, (unsigned)hold_ms);
+        }
+    }
+    if (before_state != PHYSICAL_CONFIRMATION_EXPIRED &&
+        after_state == PHYSICAL_CONFIRMATION_EXPIRED) {
+        ESP_LOGW(TAG, "GPIO5 %s confirmation window expired", path);
+    }
+}
+
 static void commissioning_wifi_controller_task(void *arg) {
     (void)arg;
     while (true) {
@@ -206,13 +338,14 @@ static void commissioning_backend_recovery_task(void *arg) {
         if ((xEventGroupGetBits(s_wifi_events) & WIFI_CONNECTED_BIT) != 0 &&
             !commissioning_backend_reachability_is_pending(&s_backend_reachability)) {
             if (!commissioning_backend_reachability_start_https(&s_backend_reachability,
-                    CONFIG_PULSELINK_REDEMPTION_BASE_URL, device_id, NULL, 8000U)) {
+                    CONFIG_PULSELINK_REDEMPTION_BASE_URL, device_id, 8000U)) {
                 ESP_LOGW(TAG, "backend recovery probe unavailable; retrying later");
             }
         }
-        vTaskDelay(pdMS_TO_TICKS(30000));
+        ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(30000));
     }
     clear_sensitive(device_id, sizeof(device_id));
+    s_backend_recovery_task = NULL;
     vTaskDelete(NULL);
 }
 
@@ -300,7 +433,7 @@ static void commissioning_redemption_task(void *arg) {
         !commissioning_transition(&s_commissioning, COMMISSIONING_CREDENTIAL_PERSISTING)) goto failed;
 
     if (!commissioning_backend_reachability_start_https(&s_backend_reachability,
-            CONFIG_PULSELINK_REDEMPTION_BASE_URL, device_id, device_key, 8000U)) goto failed;
+            CONFIG_PULSELINK_REDEMPTION_BASE_URL, device_id, 8000U)) goto failed;
     goto cleanup;
 
 failed:
@@ -360,13 +493,20 @@ static void commissioning_gate_task(void *arg) {
     commissioning_begin(&s_commissioning, now, COMMISSIONING_PAIRING_WINDOW_MS);
     ESP_LOGI(TAG, "GPIO5 confirmation window start_ms=%u end_ms=%u",
         (unsigned)now, (unsigned)confirm_deadline);
-    physical_confirmation_start_level(&s_physical_confirmation,
-        gpio_get_level(CONFIG_PULSELINK_COMMISSIONING_BUTTON_GPIO) == 0, now);
+    commissioning_button_diagnostics_t diagnostics = { .last_level = 1 };
+    if (!commissioning_confirmation_begin(&s_physical_confirmation, &diagnostics,
+            now, "initial-commissioning")) {
+        ESP_LOGE(TAG, "GPIO5 initial commissioning gate could not be initialized");
+        (void)commissioning_fail(&s_commissioning);
+        vTaskDelete(NULL);
+        return;
+    }
     while (commissioning_state(&s_commissioning) == COMMISSIONING_WAITING_FOR_PHYSICAL_CONFIRMATION ||
-           commissioning_state(&s_commissioning) == COMMISSIONING_SOFTAP_ACTIVE) {
+           commissioning_state(&s_commissioning) == COMMISSIONING_SOFTAP_ACTIVE ||
+           commissioning_state(&s_commissioning) == COMMISSIONING_RECEIVING_CONFIG) {
         now = (uint32_t)pdTICKS_TO_MS(xTaskGetTickCount());
-        physical_confirmation_sample_level(&s_physical_confirmation,
-            gpio_get_level(CONFIG_PULSELINK_COMMISSIONING_BUTTON_GPIO), now);
+        commissioning_confirmation_sample(&s_physical_confirmation,
+            &diagnostics, now, "initial-commissioning");
         if (physical_confirmation_state(&s_physical_confirmation) == PHYSICAL_CONFIRMATION_ACCEPTED) {
             if (commissioning_accept_physical(&s_commissioning, now)) {
                 uint8_t mac[6] = { 0 };
@@ -405,15 +545,20 @@ static void commissioning_recovery_button_task(void *arg) {
     const uint32_t deadline = started_at + PHYSICAL_CONFIRMATION_WINDOW_MS;
     uint32_t now = started_at;
     bool accepted = false;
-    ESP_LOGI(TAG, "reconfiguration GPIO5 window start_ms=%u end_ms=%u",
+    ESP_LOGI(TAG, "GPIO5 recovery gate task started task_priority=5 start_ms=%u end_ms=%u",
         (unsigned)started_at, (unsigned)deadline);
-    physical_confirmation_start_level(&s_physical_confirmation,
-        gpio_get_level(CONFIG_PULSELINK_COMMISSIONING_BUTTON_GPIO) == 0, now);
+    commissioning_button_diagnostics_t diagnostics = { .last_level = 1 };
+    if (!commissioning_confirmation_begin(&s_physical_confirmation, &diagnostics,
+            now, "reconfiguration")) {
+        ESP_LOGE(TAG, "GPIO5 reconfiguration confirmation could not be initialized");
+        vTaskDelete(NULL);
+        return;
+    }
 
     while ((uint32_t)(now - started_at) < PHYSICAL_CONFIRMATION_WINDOW_MS) {
         now = (uint32_t)pdTICKS_TO_MS(xTaskGetTickCount());
-        physical_confirmation_sample_level(&s_physical_confirmation,
-            gpio_get_level(CONFIG_PULSELINK_COMMISSIONING_BUTTON_GPIO), now);
+        commissioning_confirmation_sample(&s_physical_confirmation,
+            &diagnostics, now, "reconfiguration");
         if (physical_confirmation_state(&s_physical_confirmation) == PHYSICAL_CONFIRMATION_ACCEPTED) {
             accepted = commissioning_startup_reconfiguration_allowed(
                 true, s_operational_credential_present,
@@ -424,10 +569,11 @@ static void commissioning_recovery_button_task(void *arg) {
         vTaskDelay(pdMS_TO_TICKS(10));
     }
     if (!accepted) {
-        ESP_LOGI(TAG, "GPIO5 reconfiguration window ended; backend recovery remains active");
+        ESP_LOGI(TAG, "GPIO5 reconfiguration gate closed; backend recovery remains active");
         vTaskDelete(NULL);
         return;
     }
+    ESP_LOGI(TAG, "GPIO5 reconfiguration gesture accepted; pausing backend recovery");
 
     if (s_wifi_mode_mutex == NULL ||
         xSemaphoreTake(s_wifi_mode_mutex, pdMS_TO_TICKS(1000)) != pdTRUE) {
@@ -450,6 +596,7 @@ static void commissioning_recovery_button_task(void *arg) {
             vTaskDelete(NULL);
             return;
         }
+        ESP_LOGI(TAG, "backend recovery controller cancelled result=ESP_OK");
     } else if (!commissioning_startup_reconfiguration_state_allowed(recovery_state, false)) {
         ESP_LOGE(TAG, "GPIO5 reconfiguration rejected: recovery state is not terminal");
         if (xSemaphoreTake(s_wifi_mode_mutex, pdMS_TO_TICKS(1000)) == pdTRUE) {
@@ -458,6 +605,8 @@ static void commissioning_recovery_button_task(void *arg) {
         }
         vTaskDelete(NULL);
         return;
+    } else {
+        ESP_LOGI(TAG, "backend recovery already terminal state=%d", (int)recovery_state);
     }
 
     s_backend_recovery_requested = false;
@@ -488,7 +637,8 @@ static void commissioning_recovery_button_task(void *arg) {
         return;
     }
     ESP_LOGI(TAG, "GPIO5 reconfiguration SoftAP active; identity and operational storage retained until redemption succeeds");
-    while (commissioning_state(&s_commissioning) == COMMISSIONING_SOFTAP_ACTIVE) {
+    while (commissioning_state(&s_commissioning) == COMMISSIONING_SOFTAP_ACTIVE ||
+           commissioning_state(&s_commissioning) == COMMISSIONING_RECEIVING_CONFIG) {
         now = (uint32_t)pdTICKS_TO_MS(xTaskGetTickCount());
         if (commissioning_expire_if_needed(&s_commissioning, now)) {
             commissioning_stop_transport();
@@ -540,6 +690,44 @@ static esp_err_t queue_save_locked(void) {
     return err;
 }
 
+static device_event_queue_counts_t queue_counts_locked(void) {
+    uint8_t states[EVENT_QUEUE_MAX];
+    for (size_t index = 0; index < EVENT_QUEUE_MAX; index++) states[index] = s_event_queue.events[index].state;
+    return device_event_queue_count(states, EVENT_QUEUE_MAX);
+}
+
+#if CONFIG_PULSELINK_COMMISSIONING_ENABLED
+static void on_backend_device_authenticated(void *context) {
+    (void)context;
+    if (s_queue_mutex == NULL || xSemaphoreTake(s_queue_mutex, pdMS_TO_TICKS(100)) != pdTRUE) {
+        ESP_LOGE(TAG, "authenticated Device queue recovery could not lock persistent queue");
+        return;
+    }
+    uint8_t previous_states[EVENT_QUEUE_MAX];
+    uint8_t states[EVENT_QUEUE_MAX];
+    for (size_t index = 0; index < EVENT_QUEUE_MAX; index++) {
+        previous_states[index] = s_event_queue.events[index].state;
+        states[index] = previous_states[index];
+    }
+    size_t reactivated = device_event_queue_reactivate_blocked(states, EVENT_QUEUE_MAX, true);
+    for (size_t index = 0; index < EVENT_QUEUE_MAX; index++) s_event_queue.events[index].state = states[index];
+    esp_err_t save_result = reactivated == 0U ? ESP_OK : queue_save_locked();
+    if (save_result != ESP_OK) {
+        for (size_t index = 0; index < EVENT_QUEUE_MAX; index++) s_event_queue.events[index].state = previous_states[index];
+    }
+    device_event_queue_counts_t counts = queue_counts_locked();
+    xSemaphoreGive(s_queue_mutex);
+    if (save_result != ESP_OK) {
+        ESP_LOGE(TAG, "authenticated Device queue recovery persistence failed; blocked events preserved: %s",
+            esp_err_to_name(save_result));
+        return;
+    }
+    ESP_LOGI(TAG, "authenticated Device; event queue pending=%u blocked=%u empty=%u reactivated=%u",
+        (unsigned)counts.pending, (unsigned)counts.blocked, (unsigned)counts.empty, (unsigned)reactivated);
+    if (reactivated > 0U && s_sender_task != NULL) xTaskNotifyGive(s_sender_task);
+}
+#endif
+
 static esp_err_t queue_load(void) {
     nvs_handle_t handle;
     esp_err_t err = nvs_open("events", NVS_READWRITE, &handle);
@@ -565,6 +753,10 @@ static int queue_find_pending_locked(void) {
     }
     return -1;
 }
+
+_Static_assert((int)EVENT_SLOT_EMPTY == (int)DEVICE_EVENT_QUEUE_EMPTY, "event queue empty state contract mismatch");
+_Static_assert((int)EVENT_SLOT_PENDING == (int)DEVICE_EVENT_QUEUE_PENDING, "event queue pending state contract mismatch");
+_Static_assert((int)EVENT_SLOT_BLOCKED == (int)DEVICE_EVENT_QUEUE_BLOCKED, "event queue blocked state contract mismatch");
 
 #if CONFIG_PULSELINK_BUTTON_GPIO >= 0
 static bool create_event_id(char output[EVENT_ID_LENGTH]) {
@@ -601,8 +793,11 @@ static bool enqueue_button_event(void) {
         if (s_event_queue.events[i].state == EVENT_SLOT_EMPTY) { slot = (int)i; break; }
     }
     if (slot < 0) {
+        s_diagnostics.event_queue_drop_count++;
+        device_event_queue_counts_t counts = queue_counts_locked();
         xSemaphoreGive(s_queue_mutex);
-        ESP_LOGW(TAG, "event queue full; retaining existing events");
+        ESP_LOGW(TAG, "event queue full; retaining existing events pending=%u blocked=%u",
+            (unsigned)counts.pending, (unsigned)counts.blocked);
         set_led_error();
         return false;
     }
@@ -620,9 +815,12 @@ static bool enqueue_button_event(void) {
     esp_err_t err = queue_save_locked();
     xSemaphoreGive(s_queue_mutex);
     if (err != ESP_OK) {
+        s_diagnostics.event_queue_drop_count++;
+        s_diagnostics.last_event_error = (uint32_t)err;
         ESP_LOGE(TAG, "event queue save failed: %s", esp_err_to_name(err));
         return false;
     }
+    s_diagnostics.event_queue_push_count++;
     ESP_LOGI(TAG, "button event queued slot=%d", slot);
     if (s_sender_task != NULL) xTaskNotifyGive(s_sender_task);
     return true;
@@ -803,7 +1001,9 @@ static bool block_event(int slot) {
 static void event_sender_task(void *arg) {
     (void)arg;
     uint32_t backoff_ms = 1000U;
+    int last_wait_state = -1;
     while (true) {
+        diagnostics_log_summary(xTaskGetTickCount());
         xEventGroupWaitBits(s_wifi_events, WIFI_CONNECTED_BIT, pdFALSE, pdTRUE, portMAX_DELAY);
         int slot = -1;
         queued_event_t event = { 0 };
@@ -814,16 +1014,29 @@ static void event_sender_task(void *arg) {
         }
         if (slot < 0) { ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(1000)); continue; }
 #if CONFIG_PULSELINK_COMMISSIONING_ENABLED
-        if (commissioning_state(&s_commissioning) != COMMISSIONING_ONLINE) {
+        commissioning_state_t current_state = commissioning_state(&s_commissioning);
+        if (current_state != COMMISSIONING_ONLINE) {
+            if (last_wait_state != (int)current_state) {
+                ESP_LOGI(TAG, "event sender paused queued_event_present=yes commissioning_state=%d", (int)current_state);
+                last_wait_state = (int)current_state;
+            }
             vTaskDelay(pdMS_TO_TICKS(1000));
             continue;
         }
+        last_wait_state = -1;
 #endif
+        s_diagnostics.event_queue_pop_count++;
         int status_code = 0;
+        s_diagnostics.event_worker_process_count++;
+        s_diagnostics.event_send_attempt_count++;
         esp_err_t err = send_event(&event, &status_code);
+        s_diagnostics.last_event_error = (uint32_t)err;
+        s_diagnostics.last_http_status = status_code;
         device_event_http_decision_t decision = device_event_http_classify(err == ESP_OK, status_code);
         if (decision == DEVICE_EVENT_HTTP_ACK) {
             if (mark_event_sent(slot)) {
+                s_diagnostics.event_send_success_count++;
+                ESP_LOGI(TAG, "event acknowledged by backend slot=%d status=%d", slot, status_code);
                 backoff_ms = 1000U;
                 set_led(true);
                 continue;
@@ -832,6 +1045,7 @@ static void event_sender_task(void *arg) {
             if (backoff_ms < 30000U) backoff_ms *= 2U;
             continue;
         }
+        s_diagnostics.event_send_fail_count++;
         if (decision == DEVICE_EVENT_HTTP_REJECT) {
             if (block_event(slot)) {
                 if (status_code == 401) {
@@ -868,8 +1082,9 @@ static void button_task(void *arg) {
         now = xTaskGetTickCount();
         pressed = gpio_get_level(CONFIG_PULSELINK_BUTTON_GPIO) == 0;
         uint32_t now_ms = (uint32_t)pdTICKS_TO_MS(now);
-        if (event_button_sample(&s_event_button, pressed, now_ms) && enqueue_button_event()) {
-            event_button_record_enqueued(&s_event_button, now_ms);
+        if (event_button_sample(&s_event_button, pressed, now_ms)) {
+            s_diagnostics.gpio_press_count++;
+            if (enqueue_button_event()) event_button_record_enqueued(&s_event_button, now_ms);
         }
         vTaskDelay(pdMS_TO_TICKS(10));
     }
@@ -899,6 +1114,7 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t e
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         const ip_event_got_ip_t *event = (const ip_event_got_ip_t *)event_data;
         s_disconnect_count = 0;
+        s_diagnostics.network_ready_count++;
         xEventGroupSetBits(s_wifi_events, WIFI_CONNECTED_BIT);
 #if CONFIG_PULSELINK_COMMISSIONING_ENABLED
         commissioning_wifi_controller_on_event(&s_commissioning_wifi,
@@ -920,6 +1136,7 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t e
         ESP_LOGI(TAG, "wifi got ip " IPSTR, IP2STR(&event->ip_info.ip));
         wifi_log_rssi();
         if (s_sender_task != NULL) xTaskNotifyGive(s_sender_task);
+        if (s_backend_recovery_task != NULL) xTaskNotifyGive(s_backend_recovery_task);
         if (s_http_smoke_task != NULL) xTaskNotifyGive(s_http_smoke_task);
     }
 }
@@ -971,7 +1188,10 @@ static esp_err_t wifi_start(void) {
     ESP_ERROR_CHECK(esp_wifi_init(&init_config));
     ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &wifi_event_handler, NULL));
     ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &wifi_event_handler, NULL));
-    if (strlen(CONFIG_PULSELINK_BACKEND_URL) > 0U) xTaskCreate(http_smoke_task, "http_smoke", 4096, NULL, 3, &s_http_smoke_task);
+    if (strlen(CONFIG_PULSELINK_BACKEND_URL) > 0U &&
+        xTaskCreate(http_smoke_task, "http_smoke", 4096, NULL, 3, &s_http_smoke_task) != pdPASS) {
+        ESP_LOGW(TAG, "HTTP smoke task could not be started; continuing without smoke probe");
+    }
     wifi_config_t wifi_config = { 0 };
     if (configured) {
         strlcpy((char *)wifi_config.sta.ssid, CONFIG_PULSELINK_WIFI_SSID, sizeof(wifi_config.sta.ssid));
@@ -1024,11 +1244,20 @@ static esp_err_t wifi_start(void) {
         return ESP_ERR_NO_MEM;
     }
 #else
-    if (station_configured) xTaskCreate(wifi_reconnect_task, "wifi_reconnect", 4096, NULL, 5, NULL);
+    if (station_configured && xTaskCreate(wifi_reconnect_task, "wifi_reconnect", 4096, NULL, 5, NULL) != pdPASS) {
+        ESP_LOGE(TAG, "Wi-Fi reconnect task could not be started");
+        return ESP_ERR_NO_MEM;
+    }
 #endif
-    xTaskCreate(event_sender_task, "event_sender", 8192, NULL, 4, &s_sender_task);
+    if (xTaskCreate(event_sender_task, "event_sender", 8192, NULL, 4, &s_sender_task) != pdPASS) {
+        ESP_LOGE(TAG, "event sender task could not be started");
+        return ESP_ERR_NO_MEM;
+    }
 #if CONFIG_PULSELINK_COMMISSIONING_ENABLED
-    xTaskCreate(commissioning_wifi_controller_task, "commissioning_wifi", 4096, NULL, 5, NULL);
+    if (xTaskCreate(commissioning_wifi_controller_task, "commissioning_wifi", 4096, NULL, 5, NULL) != pdPASS) {
+        ESP_LOGE(TAG, "commissioning Wi-Fi controller task could not be started");
+        return ESP_ERR_NO_MEM;
+    }
 #endif
     return ESP_OK;
 }
@@ -1063,6 +1292,11 @@ void app_main(void) {
         ESP_LOGE(TAG, "persistent event queue unavailable; refusing event capture");
         return;
     }
+    device_event_queue_counts_t queue_counts = queue_counts_locked();
+    ESP_LOGI(TAG, "persistent event queue loaded capacity=%u pending=%u blocked=%u empty=%u",
+        EVENT_QUEUE_MAX, (unsigned)queue_counts.pending, (unsigned)queue_counts.blocked,
+        (unsigned)queue_counts.empty);
+    s_diagnostics.last_summary_at = xTaskGetTickCount() - pdMS_TO_TICKS(30000);
 #if CONFIG_PULSELINK_COMMISSIONING_ENABLED
     if (CONFIG_PULSELINK_COMMISSIONING_BUTTON_GPIO < 0) {
         ESP_LOGE(TAG, "commissioning disabled at runtime: button GPIO is unconfigured");
@@ -1117,6 +1351,8 @@ void app_main(void) {
                 ESP_LOGE(TAG, "commissioning disabled at runtime: Wi-Fi controller initialization failed");
                 return;
             }
+            commissioning_backend_reachability_set_authenticated_callback(
+                &s_backend_reachability, on_backend_device_authenticated, NULL);
             physical_confirmation_init(&s_physical_confirmation);
             if (!commissioning_transport_init(&s_commissioning_transport, &s_commissioning, &s_device_identity, commissioning_credentials_received, NULL)) {
                 ESP_LOGE(TAG, "commissioning disabled at runtime: transport initialization failed");
@@ -1131,10 +1367,14 @@ void app_main(void) {
                 ESP_ERROR_CHECK(gpio_config(&commissioning_button));
                 commissioning_ready = true;
                 s_commissioning_runtime_ready = true;
-                ESP_LOGI(TAG, "GPIO5 commissioning input initialized: active-low with internal pull-up");
+                ESP_LOGI(TAG, "commissioning build enabled GPIO5=%d mode=input pull_up=enabled pull_down=disabled active_low=yes",
+                    CONFIG_PULSELINK_COMMISSIONING_BUTTON_GPIO);
             }
         }
     }
+#endif
+#if !CONFIG_PULSELINK_COMMISSIONING_ENABLED
+    ESP_LOGW(TAG, "commissioning feature is compiled out; GPIO5 cannot open SoftAP in this firmware profile");
 #endif
 #if CONFIG_PULSELINK_STATUS_LED_GPIO >= 0
     {
@@ -1147,18 +1387,30 @@ void app_main(void) {
     {
         gpio_config_t button = { .pin_bit_mask = 1ULL << CONFIG_PULSELINK_BUTTON_GPIO, .mode = GPIO_MODE_INPUT, .pull_up_en = GPIO_PULLUP_ENABLE, .pull_down_en = GPIO_PULLDOWN_DISABLE, .intr_type = GPIO_INTR_DISABLE };
         ESP_ERROR_CHECK(gpio_config(&button));
-        xTaskCreate(button_task, "button", 3072, NULL, 5, NULL);
+        if (xTaskCreate(button_task, "button", 3072, NULL, 5, &s_button_task) != pdPASS) {
+            s_button_task = NULL;
+            ESP_LOGE(TAG, "button task could not be started; GPIO4 event capture is disabled");
+        }
     }
 #else
     ESP_LOGW(TAG, "button GPIO is unconfigured; event capture is disabled");
 #endif
+    ESP_LOGI(TAG,
+        "build_identity version=%s profile=%s config_fingerprint=%s idf=%s target=%s event_gpio=%d commissioning_gpio=%d commissioning_enabled=%d identity_provider=%d credential_storage=%d",
+        CONFIG_PULSELINK_FIRMWARE_VERSION, PULSELINK_BUILD_PROFILE,
+        PULSELINK_BUILD_CONFIG_FINGERPRINT, esp_get_idf_version(), CONFIG_IDF_TARGET,
+        CONFIG_PULSELINK_BUTTON_GPIO, CONFIG_PULSELINK_COMMISSIONING_BUTTON_GPIO,
+        PULSELINK_COMMISSIONING_ENABLED_VALUE,
+        PULSELINK_IDENTITY_PROVIDER_ENABLED_VALUE,
+        PULSELINK_CREDENTIAL_STORAGE_ENABLED_VALUE);
     ESP_LOGI(TAG, "PulseLink firmware %s queue_capacity=%u", CONFIG_PULSELINK_FIRMWARE_VERSION, EVENT_QUEUE_MAX);
     if (wifi_start() != ESP_OK) {
         ESP_LOGW(TAG, "Wi-Fi is not started; queued events remain in NVS");
     }
 #if CONFIG_PULSELINK_COMMISSIONING_ENABLED
     else if (commissioning_ready && s_backend_recovery_requested) {
-        if (xTaskCreate(commissioning_backend_recovery_task, "commissioning_recovery", 4096, NULL, 5, NULL) != pdPASS) {
+        if (xTaskCreate(commissioning_backend_recovery_task, "commissioning_recovery", 4096, NULL, 5, &s_backend_recovery_task) != pdPASS) {
+            s_backend_recovery_task = NULL;
             (void)commissioning_wifi_controller_fail(&s_commissioning_wifi,
                 commissioning_wifi_controller_generation(&s_commissioning_wifi));
             ESP_LOGE(TAG, "backend recovery task could not be started");

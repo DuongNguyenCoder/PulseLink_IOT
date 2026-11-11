@@ -47,6 +47,12 @@ final class CommissioningLifecycle {
         return true;
     }
 
+    boolean retrySoftApConnection(long nowMillis) {
+        if (state != State.CONNECTING_TO_DEVICE || expired(nowMillis)) return false;
+        state = State.SESSION_READY;
+        return true;
+    }
+
     boolean expire(long nowMillis) {
         if (state == State.ONLINE || state == State.FAILED || state == State.CANCELLED || state == State.EXPIRED) return false;
         if (nowMillis < deadlineMillis) return false;

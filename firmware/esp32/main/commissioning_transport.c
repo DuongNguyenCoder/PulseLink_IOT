@@ -12,7 +12,9 @@
 #include "esp_mac.h"
 #include "esp_netif.h"
 #include "esp_random.h"
+#include "esp_timer.h"
 #include "esp_wifi.h"
+#include "esp_wifi_default.h"
 #include "mbedtls/base64.h"
 
 #define TRANSPORT_TAG "pulselink-commissioning"
@@ -33,44 +35,62 @@ static bool b64_string(const uint8_t *value, size_t length, char *output, size_t
 
 static esp_err_t enrollment_proof_handler(httpd_req_t *request) {
     commissioning_transport_t *transport = request->user_ctx;
+    ESP_LOGI(TRANSPORT_TAG, "enrollment proof request received content_length=%d", (int)request->content_len);
     char body[REQUEST_LIMIT + 1U];
-    if (transport == NULL || !transport->running || transport->identity == NULL ||
+    const char *rejection_reason = NULL;
+    if (transport == NULL || !transport->running || transport->identity == NULL || transport->lifecycle == NULL ||
         commissioning_state(transport->lifecycle) != COMMISSIONING_SOFTAP_ACTIVE ||
-        device_identity_state(transport->identity) != DEVICE_IDENTITY_READY ||
-        !request_body(request, body, sizeof(body)))
+        device_identity_state(transport->identity) != DEVICE_IDENTITY_READY) {
+        rejection_reason = "commissioning_context_unavailable";
+    } else if (!request_body(request, body, sizeof(body))) {
+        rejection_reason = "request_body_invalid";
+    }
+    if (rejection_reason != NULL) {
+        ESP_LOGW(TRANSPORT_TAG, "enrollment proof rejected reason=%s", rejection_reason);
         return response_error(request, 409, "commissioning_window_required") ? ESP_OK : ESP_FAIL;
+    }
     cJSON *root = cJSON_ParseWithLength(body, strlen(body));
-    if (root == NULL) return response_error(request, 400, "invalid_json") ? ESP_OK : ESP_FAIL;
-    char requested_id[DEVICE_ID_LIMIT], device_id[16], store_id[SESSION_ID_LIMIT];
-    char session_id[SESSION_ID_LIMIT], challenge[CHALLENGE_LIMIT];
+    if (root == NULL) {
+        ESP_LOGW(TRANSPORT_TAG, "enrollment proof rejected reason=invalid_json");
+        return response_error(request, 400, "invalid_json") ? ESP_OK : ESP_FAIL;
+    }
+    char requested_id[DEVICE_ID_LIMIT] = { 0 }, device_id[16] = { 0 }, store_id[SESSION_ID_LIMIT] = { 0 };
+    char session_id[SESSION_ID_LIMIT] = { 0 }, challenge[CHALLENGE_LIMIT] = { 0 };
     uint32_t expires_at = 0U;
-    uint8_t mac[6], public_key[160], signature[128];
+    uint8_t mac[6] = { 0 }, public_key[160] = { 0 }, signature[128] = { 0 };
     size_t public_key_length = 0U, signature_length = 0U;
-    char public_key_b64[256], signature_b64[192], payload[2048];
+    char public_key_b64[256] = { 0 }, signature_b64[192] = { 0 }, payload[2048] = { 0 };
     size_t payload_length = 0U;
-    time_t now = time(NULL);
-    bool valid = json_string(root, "deviceId", requested_id, sizeof(requested_id)) &&
-        json_string(root, "storeId", store_id, sizeof(store_id)) &&
-        json_string(root, "claimSessionId", session_id, sizeof(session_id)) &&
-        json_string(root, "challenge", challenge, sizeof(challenge)) &&
-        json_expiry(root, &expires_at) && expires_at > (uint32_t)now &&
-        expires_at <= (uint32_t)now + 300U &&
-        esp_read_mac(mac, ESP_MAC_WIFI_STA) == ESP_OK &&
-        device_provisioning_build_device_id(mac, device_id, sizeof(device_id)) &&
-        strcmp(requested_id, device_id) == 0 &&
-        device_identity_get_public_key(transport->identity, public_key, sizeof(public_key), &public_key_length) == DEVICE_KEY_PROVIDER_OK &&
-        b64_string(public_key, public_key_length, public_key_b64, sizeof(public_key_b64)) &&
-        device_provisioning_build_claim_payload(payload, sizeof(payload), device_id, store_id,
+    if (!json_string(root, "deviceId", requested_id, sizeof(requested_id)) ||
+        !json_string(root, "storeId", store_id, sizeof(store_id)) ||
+        !json_string(root, "claimSessionId", session_id, sizeof(session_id)) ||
+        !json_string(root, "challenge", challenge, sizeof(challenge)) ||
+        !json_expiry(root, &expires_at)) {
+        rejection_reason = "claim_fields_invalid";
+    } else if (esp_read_mac(mac, ESP_MAC_WIFI_STA) != ESP_OK ||
+        !device_provisioning_build_device_id(mac, device_id, sizeof(device_id)) ||
+        strcmp(requested_id, device_id) != 0) {
+        rejection_reason = "device_identity_mismatch";
+    } else if (device_identity_get_public_key(transport->identity, public_key, sizeof(public_key), &public_key_length) != DEVICE_KEY_PROVIDER_OK ||
+        !b64_string(public_key, public_key_length, public_key_b64, sizeof(public_key_b64))) {
+        rejection_reason = "identity_key_unavailable";
+    } else if (device_provisioning_build_claim_payload(payload, sizeof(payload), device_id, store_id,
             session_id, device_identity_key_version(transport->identity), public_key_b64,
-            challenge, expires_at, &payload_length) == DEVICE_PROVISIONING_PAYLOAD_OK &&
-        device_identity_sign_der(transport->identity, (const uint8_t *)payload, payload_length,
-            signature, sizeof(signature), &signature_length) == DEVICE_KEY_PROVIDER_OK &&
-        b64_string(signature, signature_length, signature_b64, sizeof(signature_b64));
+            challenge, expires_at, &payload_length) != DEVICE_PROVISIONING_PAYLOAD_OK) {
+        rejection_reason = "claim_transcript_invalid";
+    } else if (device_identity_sign_der(transport->identity, (const uint8_t *)payload, payload_length,
+            signature, sizeof(signature), &signature_length) != DEVICE_KEY_PROVIDER_OK ||
+        !b64_string(signature, signature_length, signature_b64, sizeof(signature_b64))) {
+        rejection_reason = "identity_signature_failed";
+    }
     cJSON_Delete(root);
     clear_bytes(payload, sizeof(payload));
     clear_bytes(signature, sizeof(signature));
     clear_bytes(public_key, sizeof(public_key));
-    if (!valid) return response_error(request, 401, "device_claim_proof_unavailable") ? ESP_OK : ESP_FAIL;
+    if (rejection_reason != NULL) {
+        ESP_LOGW(TRANSPORT_TAG, "enrollment proof rejected reason=%s", rejection_reason);
+        return response_error(request, 401, "device_claim_proof_unavailable") ? ESP_OK : ESP_FAIL;
+    }
     cJSON *response = cJSON_CreateObject();
     if (response == NULL) return response_error(request, 503, "response_unavailable") ? ESP_OK : ESP_FAIL;
     cJSON_AddStringToObject(response, "deviceId", device_id);
@@ -84,6 +104,8 @@ static esp_err_t enrollment_proof_handler(httpd_req_t *request) {
     bool sent = response_json(request, response, "application/json");
     cJSON_Delete(response);
     clear_bytes(signature_b64, sizeof(signature_b64));
+    if (sent) ESP_LOGI(TRANSPORT_TAG, "enrollment proof response sent");
+    else ESP_LOGW(TRANSPORT_TAG, "enrollment proof response send failed");
     return sent ? ESP_OK : ESP_FAIL;
 }
 
@@ -166,15 +188,39 @@ static bool b64_string(const uint8_t *value, size_t length, char *output, size_t
 }
 
 static esp_err_t handshake_handler(httpd_req_t *request) {
+    const int64_t started_at_us = esp_timer_get_time();
+    ESP_LOGI(TRANSPORT_TAG, "handshake request received content_length=%d", (int)request->content_len);
     commissioning_transport_t *transport = request->user_ctx;
     char body[REQUEST_LIMIT + 1U];
     if (transport == NULL || !transport->running || transport->lifecycle == NULL ||
-        commissioning_state(transport->lifecycle) != COMMISSIONING_SOFTAP_ACTIVE ||
-        transport->identity == NULL || device_identity_state(transport->identity) != DEVICE_IDENTITY_READY ||
-        !request_body(request, body, sizeof(body))) return response_error(request, 400, "invalid_request") ? ESP_OK : ESP_FAIL;
+        transport->identity == NULL || device_identity_state(transport->identity) != DEVICE_IDENTITY_READY) {
+        ESP_LOGW(TRANSPORT_TAG, "handshake rejected reason=request_context_or_body_invalid");
+        return response_error(request, 400, "invalid_request") ? ESP_OK : ESP_FAIL;
+    }
+    if (commissioning_state(transport->lifecycle) == COMMISSIONING_RECEIVING_CONFIG) {
+        clear_bytes(transport->session_key, sizeof(transport->session_key));
+        clear_bytes(transport->transcript, sizeof(transport->transcript));
+        clear_bytes(transport->session_id, sizeof(transport->session_id));
+        clear_bytes(transport->challenge, sizeof(transport->challenge));
+        transport->transcript_length = 0U;
+        transport->handshake_complete = false;
+        if (!commissioning_retry_handshake(transport->lifecycle)) {
+            ESP_LOGW(TRANSPORT_TAG, "handshake retry rejected reason=state_not_recoverable");
+            return response_error(request, 409, "invalid_state") ? ESP_OK : ESP_FAIL;
+        }
+        ESP_LOGI(TRANSPORT_TAG, "previous handshake abandoned; accepting bounded retry");
+    }
+    if (commissioning_state(transport->lifecycle) != COMMISSIONING_SOFTAP_ACTIVE ||
+        !request_body(request, body, sizeof(body))) {
+        ESP_LOGW(TRANSPORT_TAG, "handshake rejected reason=commissioning_state_or_body_invalid");
+        return response_error(request, 400, "invalid_request") ? ESP_OK : ESP_FAIL;
+    }
 
     cJSON *root = cJSON_ParseWithLength(body, strlen(body));
-    if (root == NULL) return response_error(request, 400, "invalid_json") ? ESP_OK : ESP_FAIL;
+    if (root == NULL) {
+        ESP_LOGW(TRANSPORT_TAG, "handshake rejected reason=invalid_json");
+        return response_error(request, 400, "invalid_json") ? ESP_OK : ESP_FAIL;
+    }
     char session_id[SESSION_ID_LIMIT], challenge[CHALLENGE_LIMIT], context[SESSION_ID_LIMIT];
     uint32_t expires_at = 0U;
     uint8_t client_nonce[32], client_ephemeral[65], enrolled_key[160];
@@ -188,11 +234,13 @@ static esp_err_t handshake_handler(httpd_req_t *request) {
         json_base64_field(root, "deviceKey", enrolled_key, sizeof(enrolled_key), &enrolled_key_length);
     if (!valid || client_nonce_length != 32U || client_ephemeral_length != 65U || client_ephemeral[0] != 0x04U) {
         cJSON_Delete(root);
+        ESP_LOGW(TRANSPORT_TAG, "handshake rejected reason=invalid_fields");
         return response_error(request, 400, "invalid_handshake") ? ESP_OK : ESP_FAIL;
     }
     time_t now = time(NULL);
     if (expires_at <= (uint32_t)now) {
         cJSON_Delete(root);
+        ESP_LOGW(TRANSPORT_TAG, "handshake rejected reason=session_expired");
         return response_error(request, 409, "session_expired") ? ESP_OK : ESP_FAIL;
     }
     uint8_t own_key[160], device_nonce[32], device_ephemeral_public[65], shared[32], salt[64], signature[160];
@@ -229,6 +277,7 @@ static esp_err_t handshake_handler(httpd_req_t *request) {
     cJSON_Delete(root);
     if (!ok || signature_length == 0U) {
         clear_bytes(transport->session_key, sizeof(transport->session_key));
+        ESP_LOGW(TRANSPORT_TAG, "handshake rejected reason=identity_or_crypto_validation_failed");
         return response_error(request, 401, "identity_verification_failed") ? ESP_OK : ESP_FAIL;
     }
     transport->expires_at = expires_at;
@@ -238,6 +287,7 @@ static esp_err_t handshake_handler(httpd_req_t *request) {
     if (!commissioning_transition(transport->lifecycle, COMMISSIONING_RECEIVING_CONFIG)) {
         transport->handshake_complete = false;
         clear_bytes(transport->session_key, sizeof(transport->session_key));
+        ESP_LOGW(TRANSPORT_TAG, "handshake rejected reason=invalid_commissioning_state");
         return response_error(request, 409, "invalid_state") ? ESP_OK : ESP_FAIL;
     }
     cJSON *response = cJSON_CreateObject();
@@ -250,12 +300,30 @@ static esp_err_t handshake_handler(httpd_req_t *request) {
     if (ok) cJSON_AddStringToObject(response, "deviceEphemeralPublicKey", encoded);
     ok = ok && b64_string(signature, signature_length, encoded, sizeof(encoded));
     if (ok) cJSON_AddStringToObject(response, "signature", encoded);
-    if (!ok) { cJSON_Delete(response); return response_error(request, 503, "response_unavailable") ? ESP_OK : ESP_FAIL; }
+    if (!ok) {
+        cJSON_Delete(response);
+        clear_bytes(transport->session_key, sizeof(transport->session_key));
+        transport->handshake_complete = false;
+        (void)commissioning_retry_handshake(transport->lifecycle);
+        ESP_LOGW(TRANSPORT_TAG, "handshake rejected reason=response_encoding_failed");
+        return response_error(request, 503, "response_unavailable") ? ESP_OK : ESP_FAIL;
+    }
     bool sent = response_json(request, response, "application/json");
     cJSON_Delete(response);
     clear_bytes(signature, sizeof(signature));
     clear_bytes(device_nonce, sizeof(device_nonce));
     clear_bytes(device_ephemeral_public, sizeof(device_ephemeral_public));
+    if (!sent) {
+        clear_bytes(transport->session_key, sizeof(transport->session_key));
+        clear_bytes(transport->transcript, sizeof(transport->transcript));
+        clear_bytes(transport->session_id, sizeof(transport->session_id));
+        clear_bytes(transport->challenge, sizeof(transport->challenge));
+        transport->transcript_length = 0U;
+        transport->handshake_complete = false;
+        (void)commissioning_retry_handshake(transport->lifecycle);
+    }
+    ESP_LOGI(TRANSPORT_TAG, "handshake response %s elapsed_ms=%lld",
+        sent ? "sent" : "send_failed", (long long)((esp_timer_get_time() - started_at_us) / 1000));
     return sent ? ESP_OK : ESP_FAIL;
 }
 
@@ -334,24 +402,37 @@ bool commissioning_transport_init(commissioning_transport_t *transport, commissi
 
 static bool start_server(commissioning_transport_t *transport) {
     if (transport == NULL || transport->running || transport->lifecycle == NULL || transport->identity == NULL ||
-        commissioning_state(transport->lifecycle) != COMMISSIONING_SOFTAP_ACTIVE || device_identity_state(transport->identity) != DEVICE_IDENTITY_READY) return false;
+        commissioning_state(transport->lifecycle) != COMMISSIONING_SOFTAP_ACTIVE || device_identity_state(transport->identity) != DEVICE_IDENTITY_READY) {
+        ESP_LOGE(TRANSPORT_TAG, "HTTP server start rejected: transport/state/identity precondition failed");
+        return false;
+    }
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.max_uri_handlers = 3;
     config.max_open_sockets = 1;
     config.max_req_hdr_len = 512;
-    config.max_uri_handlers = 3;
+    /* Proof signing uses a 4 KiB request buffer plus bounded transcript/crypto locals. */
+    config.stack_size = 16U * 1024U;
     httpd_handle_t server = NULL;
-    if (httpd_start(&server, &config) != ESP_OK) return false;
+    esp_err_t result = httpd_start(&server, &config);
+    if (result != ESP_OK) {
+        ESP_LOGE(TRANSPORT_TAG, "HTTP server start failed: %s", esp_err_to_name(result));
+        return false;
+    }
     httpd_uri_t handshake = { .uri = "/v1/commissioning/handshake", .method = HTTP_POST, .handler = handshake_handler, .user_ctx = transport };
     httpd_uri_t credentials = { .uri = "/v1/commissioning/credentials", .method = HTTP_POST, .handler = credentials_handler, .user_ctx = transport };
     httpd_uri_t enrollment_proof = { .uri = "/v1/commissioning/enrollment-proof", .method = HTTP_POST, .handler = enrollment_proof_handler, .user_ctx = transport };
-    if (httpd_register_uri_handler(server, &handshake) != ESP_OK || httpd_register_uri_handler(server, &credentials) != ESP_OK ||
-        httpd_register_uri_handler(server, &enrollment_proof) != ESP_OK) {
-        httpd_stop(server);
+    result = httpd_register_uri_handler(server, &handshake);
+    if (result == ESP_OK) result = httpd_register_uri_handler(server, &credentials);
+    if (result == ESP_OK) result = httpd_register_uri_handler(server, &enrollment_proof);
+    if (result != ESP_OK) {
+        ESP_LOGE(TRANSPORT_TAG, "HTTP route registration failed: %s", esp_err_to_name(result));
+        esp_err_t stop_result = httpd_stop(server);
+        ESP_LOGI(TRANSPORT_TAG, "HTTP server cleanup result=%s", esp_err_to_name(stop_result));
         return false;
     }
     transport->server = server;
     transport->running = true;
+    ESP_LOGI(TRANSPORT_TAG, "commissioning HTTP server started routes=3");
     return true;
 }
 
@@ -360,30 +441,74 @@ bool commissioning_transport_start(commissioning_transport_t *transport) {
 }
 
 bool commissioning_transport_start_softap(commissioning_transport_t *transport, const char *ssid) {
-    if (transport == NULL || ssid == NULL || strlen(ssid) == 0U || strlen(ssid) > 32U) return false;
+    if (transport == NULL || ssid == NULL || strlen(ssid) == 0U || strlen(ssid) > 32U) {
+        ESP_LOGE(TRANSPORT_TAG, "SoftAP start rejected: invalid transport or SSID length");
+        return false;
+    }
     // main.c owns esp_netif, the default event loop, and the Wi-Fi driver.
     // Reinitializing those here races the already-running Station owner.
-    if (esp_netif_create_default_wifi_ap() == NULL) return false;
+    esp_netif_t *ap_netif = esp_netif_create_default_wifi_ap();
+    if (ap_netif == NULL) {
+        ESP_LOGE(TRANSPORT_TAG, "SoftAP netif creation failed");
+        return false;
+    }
+    transport->ap_netif = ap_netif;
+    ESP_LOGI(TRANSPORT_TAG, "SoftAP netif created");
+    wifi_mode_t previous_mode = WIFI_MODE_NULL;
+    esp_err_t result = esp_wifi_get_mode(&previous_mode);
+    if (result != ESP_OK) {
+        ESP_LOGE(TRANSPORT_TAG, "Wi-Fi mode query before SoftAP failed: %s", esp_err_to_name(result));
+        commissioning_transport_stop(transport);
+        return false;
+    }
+    ESP_LOGI(TRANSPORT_TAG, "Wi-Fi mode before SoftAP=%d", (int)previous_mode);
+    if ((previous_mode & WIFI_MODE_STA) != 0) {
+        result = esp_wifi_disconnect();
+        ESP_LOGI(TRANSPORT_TAG, "STA disconnect before SoftAP result=%s", esp_err_to_name(result));
+        if (result != ESP_OK && result != ESP_ERR_WIFI_NOT_CONNECT) {
+            commissioning_transport_stop(transport);
+            return false;
+        }
+    }
+    result = esp_wifi_set_mode(WIFI_MODE_AP);
+    ESP_LOGI(TRANSPORT_TAG, "Wi-Fi mode transition to AP result=%s", esp_err_to_name(result));
+    if (result != ESP_OK) {
+        commissioning_transport_stop(transport);
+        return false;
+    }
     wifi_config_t config = { 0 };
     strlcpy((char *)config.ap.ssid, ssid, sizeof(config.ap.ssid));
     config.ap.ssid_len = strlen(ssid);
     config.ap.channel = 1;
     config.ap.max_connection = 1;
     config.ap.authmode = WIFI_AUTH_OPEN;
-    if (esp_wifi_set_mode(WIFI_MODE_AP) != ESP_OK ||
-        esp_wifi_set_config(WIFI_IF_AP, &config) != ESP_OK ||
-        !commissioning_transport_start(transport)) {
-        (void)esp_wifi_set_mode(WIFI_MODE_STA);
+    result = esp_wifi_set_config(WIFI_IF_AP, &config);
+    ESP_LOGI(TRANSPORT_TAG, "SoftAP configuration result=%s", esp_err_to_name(result));
+    if (result == ESP_OK && !commissioning_transport_start(transport)) result = ESP_FAIL;
+    if (result != ESP_OK) {
+        ESP_LOGE(TRANSPORT_TAG, "SoftAP startup failed result=%s; restoring station mode and releasing AP netif",
+            esp_err_to_name(result));
+        commissioning_transport_stop(transport);
         return false;
     }
+    ESP_LOGI(TRANSPORT_TAG, "SoftAP ready; HTTP server and commissioning routes are active");
     return true;
 }
 
 void commissioning_transport_stop(commissioning_transport_t *transport) {
     if (transport == NULL) return;
-    if (transport->server != NULL) httpd_stop((httpd_handle_t)transport->server);
+    if (transport->server != NULL) {
+        esp_err_t server_result = httpd_stop((httpd_handle_t)transport->server);
+        ESP_LOGI(TRANSPORT_TAG, "commissioning HTTP server stop result=%s", esp_err_to_name(server_result));
+    }
     // Keep the single driver initialized by main.c and return its mode to STA.
-    (void)esp_wifi_set_mode(WIFI_MODE_STA);
+    esp_err_t mode_result = esp_wifi_set_mode(WIFI_MODE_STA);
+    ESP_LOGI(TRANSPORT_TAG, "Wi-Fi mode transition to STA result=%s", esp_err_to_name(mode_result));
+    if (transport->ap_netif != NULL) {
+        esp_netif_destroy_default_wifi(transport->ap_netif);
+        transport->ap_netif = NULL;
+        ESP_LOGI(TRANSPORT_TAG, "SoftAP netif destroyed");
+    }
     transport->server = NULL;
     transport->running = false;
     transport->handshake_complete = false;

@@ -23,6 +23,8 @@ run_test wifi-mode-policy main/commissioning_state.c main/commissioning_wifi_mod
 run_test startup-policy main/commissioning_startup_policy.c tests/commissioning_startup_policy_test.c
 run_test http-response-policy main/commissioning_http_response_policy.c tests/commissioning_http_response_policy_test.c
 run_test event-http-policy main/device_event_http_policy.c tests/device_event_http_policy_test.c
+run_test event-queue-policy main/device_event_queue_policy.c tests/device_event_queue_policy_test.c
+run_test authenticated-status-policy main/commissioning_status_policy.c tests/commissioning_status_policy_test.c
 run_test transcript main/commissioning_protocol.c tests/commissioning_protocol_test.c
 # shellcheck disable=SC2086
 cc $common tests/commissioning_crypto_host_test.c -lcrypto -o /tmp/pulselink-crypto
@@ -35,5 +37,5 @@ run_test backend-reachability main/commissioning_state.c main/commissioning_wifi
 run_test event-gate main/commissioning_state.c main/commissioning_credential_storage.c main/commissioning_event_gate.c tests/commissioning_event_gate_test.c
 run_test nvs-credential-provider main/commissioning_credential_storage.c main/esp_device_credential_storage.c tests/esp_device_credential_storage_test.c
 
-test "$passed" -eq 15
+test "$passed" -eq 17
 printf 'HOST_TEST_RUNNERS_PASS=%s FAIL=0 SKIP=0\n' "$passed"

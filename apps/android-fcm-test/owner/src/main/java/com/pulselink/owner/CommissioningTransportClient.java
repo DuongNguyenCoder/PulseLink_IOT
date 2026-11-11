@@ -2,18 +2,26 @@ package com.pulselink.owner;
 
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URI;
+import java.net.Proxy;
+import java.net.SocketTimeoutException;
+import java.net.URL;
+import android.net.Network;
 import java.nio.charset.StandardCharsets;
 import java.security.KeyPair;
 import java.security.MessageDigest;
 import java.security.SecureRandom;
 import java.util.Base64;
+import android.util.Log;
 import org.json.JSONObject;
 
 /** Local SoftAP client. It never persists credentials or treats HTTP 200 as online. */
 final class CommissioningTransportClient implements AutoCloseable {
-    private static final int TIMEOUT_MS = 8_000;
+    private static final String TAG = "PulseLinkCommissioningHttp";
+    private static final int CONNECT_TIMEOUT_MS = 5_000;
+    private static final int RESPONSE_TIMEOUT_MS = 20_000;
     private static final int MAX_RESPONSE = 4_096;
     private final SecureRandom random = new SecureRandom();
     private byte[] sessionKey;
@@ -21,6 +29,10 @@ final class CommissioningTransportClient implements AutoCloseable {
     private long expiresAt;
 
     JSONObject requestEnrollmentProof(String baseUrl, JSONObject claimData) throws Exception {
+        return requestEnrollmentProof(baseUrl, claimData, null);
+    }
+
+    JSONObject requestEnrollmentProof(String baseUrl, JSONObject claimData, Network network) throws Exception {
         if (baseUrl == null || !baseUrl.startsWith("http://") || claimData == null)
             throw new IllegalArgumentException("Local commissioning context required");
         JSONObject session = claimData.getJSONObject("session");
@@ -31,7 +43,7 @@ final class CommissioningTransportClient implements AutoCloseable {
         JSONObject request = new JSONObject().put("deviceId", deviceId).put("storeId", storeId)
                 .put("claimSessionId", claimSessionId).put("challenge", claimData.getString("challenge"))
                 .put("expiresAt", expiry);
-        JSONObject response = postJson(baseUrl + "/v1/commissioning/enrollment-proof", request);
+        JSONObject response = postJson(baseUrl + "/v1/commissioning/enrollment-proof", request, "claim_proof", network);
         String publicKey = response.getString("publicKeySpkiBase64");
         int keyVersion = response.getInt("keyVersion");
         String challenge = response.getString("challenge");
@@ -64,6 +76,11 @@ final class CommissioningTransportClient implements AutoCloseable {
             String challenge,
             long expiresAtEpochSeconds,
             String clientContext) throws Exception {
+        handshake(baseUrl, sessionId, deviceKeyBase64, challenge, expiresAtEpochSeconds, clientContext, null);
+    }
+
+    void handshake(String baseUrl, String sessionId, String deviceKeyBase64, String challenge,
+                   long expiresAtEpochSeconds, String clientContext, Network network) throws Exception {
         if (baseUrl == null || !baseUrl.startsWith("http://")) throw new IllegalArgumentException("Local commissioning URL required");
         if (sessionId == null || deviceKeyBase64 == null || challenge == null || clientContext == null) throw new IllegalArgumentException("Missing handshake field");
         if (expiresAtEpochSeconds <= System.currentTimeMillis() / 1000L) throw new IllegalArgumentException("Session expired");
@@ -81,7 +98,7 @@ final class CommissioningTransportClient implements AutoCloseable {
                 .put("clientContext", clientContext)
                 .put("clientNonce", Base64.getEncoder().encodeToString(clientNonce))
                 .put("clientEphemeralPublicKey", Base64.getEncoder().encodeToString(clientEphemeral));
-        JSONObject response = postJson(baseUrl + "/v1/commissioning/handshake", request);
+        JSONObject response = postJson(baseUrl + "/v1/commissioning/handshake", request, "handshake", network);
         byte[] responseKey = Base64.getDecoder().decode(response.getString("deviceKey"));
         if (!MessageDigest.isEqual(deviceKey, responseKey)) throw new SecurityException("Device identity mismatch");
         byte[] deviceNonce = Base64.getDecoder().decode(response.getString("deviceNonce"));
@@ -107,6 +124,11 @@ final class CommissioningTransportClient implements AutoCloseable {
 
     void sendCredentials(String baseUrl, String ssid, String password,
                           String deviceId, String deviceKey, String bootstrapSecret) throws Exception {
+        sendCredentials(baseUrl, ssid, password, deviceId, deviceKey, bootstrapSecret, null);
+    }
+
+    void sendCredentials(String baseUrl, String ssid, String password, String deviceId,
+                         String deviceKey, String bootstrapSecret, Network network) throws Exception {
         if (sessionKey == null || transcript == null || expiresAt <= System.currentTimeMillis() / 1000L) throw new IllegalStateException("Authenticated commissioning session required");
         if (deviceId == null || deviceKey == null || bootstrapSecret == null || bootstrapSecret.length() < 32) throw new IllegalStateException("Redemption context required");
         if (ssid == null || ssid.isEmpty() || ssid.length() > 32 || password == null || password.length() < 8 || password.length() > 64) throw new IllegalArgumentException("Invalid Wi-Fi credentials");
@@ -127,7 +149,7 @@ final class CommissioningTransportClient implements AutoCloseable {
                     .put("nonce", Base64.getEncoder().encodeToString(nonce))
                     .put("aad", Base64.getEncoder().encodeToString(transcript))
                     .put("ciphertext", Base64.getEncoder().encodeToString(ciphertext))
-                    .put("tag", Base64.getEncoder().encodeToString(tag)));
+                    .put("tag", Base64.getEncoder().encodeToString(tag)), "credentials", network);
             if (!"accepted_for_redeem".equals(response.optString("status"))) throw new SecurityException("Credential handoff was not accepted");
         } finally {
             if (plaintext != null) java.util.Arrays.fill(plaintext, (byte) 0);
@@ -147,20 +169,37 @@ final class CommissioningTransportClient implements AutoCloseable {
         expiresAt = 0L;
     }
 
-    private static JSONObject postJson(String url, JSONObject body) throws Exception {
-        HttpURLConnection connection = (HttpURLConnection) URI.create(url).toURL().openConnection();
+    private static JSONObject postJson(String url, JSONObject body, String stage, Network network) throws Exception {
+        URL target = URI.create(url).toURL();
+        HttpURLConnection connection = (HttpURLConnection) (network == null
+                ? target.openConnection(Proxy.NO_PROXY) : network.openConnection(target, Proxy.NO_PROXY));
+        String phase = "connect";
         try {
             connection.setRequestMethod("POST");
-            connection.setConnectTimeout(TIMEOUT_MS);
-            connection.setReadTimeout(TIMEOUT_MS);
+            connection.setConnectTimeout(CONNECT_TIMEOUT_MS);
+            connection.setReadTimeout(RESPONSE_TIMEOUT_MS);
             connection.setDoOutput(true);
             connection.setRequestProperty("Content-Type", "application/json");
-            connection.getOutputStream().write(body.toString().getBytes(StandardCharsets.UTF_8));
+            connection.setRequestProperty("Connection", "close");
+            byte[] requestBody = body.toString().getBytes(StandardCharsets.UTF_8);
+            connection.setFixedLengthStreamingMode(requestBody.length);
+            Log.i(TAG, "direct local request started stage=" + stage + " proxy=disabled");
+            phase = "write_request";
+            try (OutputStream output = connection.getOutputStream()) {
+                output.write(requestBody);
+                output.flush();
+            }
+            phase = "response_headers";
             int status = connection.getResponseCode();
+            Log.i(TAG, "local response received stage=" + stage + " status=" + status);
             InputStream stream = status >= 200 && status < 300 ? connection.getInputStream() : connection.getErrorStream();
+            phase = "response_body";
             String text = stream == null ? "" : readBounded(stream);
             if (status < 200 || status >= 300) throw new IllegalStateException("Commissioning request rejected");
             return new JSONObject(text);
+        } catch (SocketTimeoutException timeout) {
+            Log.w(TAG, "direct local request timed out stage=" + stage + " phase=" + phase);
+            throw new CommissioningRequestTimeout(stage, phase, timeout);
         } finally {
             connection.disconnect();
         }

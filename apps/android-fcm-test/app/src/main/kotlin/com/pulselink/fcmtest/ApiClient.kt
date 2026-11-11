@@ -130,10 +130,11 @@ class ApiClient(baseUrl: String) {
         }
     }
 
-    fun registerDevice(accessToken: String, storeId: String, name: String, firmwareVersion: String?): DeviceSummary {
+    fun registerDevice(accessToken: String, storeId: String, deviceId: String, name: String, firmwareVersion: String?): DeviceSummary {
         val data = post(
             "/v1/stores/${encodePath(storeId)}/devices",
             JSONObject().apply {
+                put("deviceId", deviceId)
                 put("name", name)
                 if (!firmwareVersion.isNullOrBlank()) put("firmwareVersion", firmwareVersion)
             },

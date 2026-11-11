@@ -4,7 +4,8 @@
 - Date: 2026-10-10
 
 ## Decision
-- Firmware: ESP32-S3 with ESP-IDF and C/C++.
+
+- Firmware: ESP32-S3 with ESP-IDF and C.
 - Backend: Node.js ESM + TypeScript + Fastify 5.
 - Validation: Zod.
 - Logging: Fastify built-in Pino logger.
@@ -14,6 +15,7 @@
 - Architecture: modular monolith for the API.
 
 ## Rationale
+
 - One API service is simpler to deploy and maintain for the first cafe.
 - TypeScript contracts and Zod validation reduce mismatch between runtime input and static types.
 - PostgreSQL uniqueness constraints support durable idempotency.
@@ -21,6 +23,7 @@
 - Modular boundaries preserve future extraction options without starting with distributed-system complexity.
 
 ## Consequences
+
 - Prisma 7 PostgreSQL runtime requires `@prisma/adapter-pg` and `pg`.
 - `prisma` and `@prisma/client` versions must be aligned.
 - Database changes are managed through reviewed migrations.

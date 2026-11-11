@@ -1,13 +1,5 @@
 /testing/
 !/audits/
 /audits/*
-!/audits/wp14-engineering-log.md
-!/audits/wp14-9-end-to-end-commissioning-report.md
-!/audits/wp14-31-full-commissioning-implementation-report.md
-!/audits/wp14-32-enrollment-storage-e2e-closure-report.md
-!/audits/wp14-33-37-commissioning-readiness-report.md
-!/audits/wp14-38a-security-and-first-commissioning-readiness.md
-!/audits/wp14-10-run-041-independent-audit.md
-!/audits/wp14-11-gpio-arbitration-and-e2e-report.md
-!/audits/wp14-11-device-claim-root-cause-and-e2e-report.md
-!/audits/wp14-12-run-046-startup-recovery-and-device-auth-report.md
+/design-system/mobile/*
+!/design-system/mobile/README.md

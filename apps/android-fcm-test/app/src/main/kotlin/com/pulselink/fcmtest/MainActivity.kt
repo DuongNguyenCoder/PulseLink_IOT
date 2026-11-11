@@ -28,6 +28,7 @@ class MainActivity : Activity() {
     private lateinit var backendStatus: TextView
     private lateinit var storeIdInput: EditText
     private lateinit var deviceNameInput: EditText
+    private lateinit var deviceIdInput: EditText
     private lateinit var deviceStatus: TextView
     private lateinit var apiBaseInput: EditText
     private lateinit var emailInput: EditText
@@ -136,6 +137,8 @@ class MainActivity : Activity() {
         root.addView(label("Store and Device access is checked by the backend using the active Owner membership."))
         storeIdInput = input("Store ID")
         root.addView(storeIdInput)
+        deviceIdInput = input("Device ID (pl- + 12 lowercase hex characters)")
+        root.addView(deviceIdInput)
         deviceNameInput = input("New device name")
         root.addView(deviceNameInput)
         deviceStatus = statusText()
@@ -292,14 +295,15 @@ class MainActivity : Activity() {
 
     private fun registerDevice() {
         val storeId = storeIdInput.text.toString().trim()
+        val deviceId = deviceIdInput.text.toString().trim()
         val name = deviceNameInput.text.toString().trim()
-        if (storeId.isBlank() || name.isBlank()) {
-            deviceStatus.text = "Enter a Store ID and Device name"
+        if (storeId.isBlank() || deviceId.isBlank() || name.isBlank()) {
+            deviceStatus.text = "Enter a Store ID, MAC-derived Device ID and Device name"
             return
         }
         runApi("Registering Device…", deviceStatus) {
             val token = credentials.getAccessToken() ?: throw ApiException(401, "UNAUTHENTICATED", "Sign in first")
-            val device = ApiClient(apiBase()).registerDevice(token, storeId, name, null)
+            val device = ApiClient(apiBase()).registerDevice(token, storeId, deviceId, name, null)
             "Registered ${device.id}. State: ${device.status}/${device.enrollmentStatus}/${device.provisioningState}. Commissioning is not complete."
         }
     }

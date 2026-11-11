@@ -2,6 +2,7 @@
 # Operational credential and identity still use ordinary NVS in the MVP profile.
 # Do not flash until board identity, wiring and recovery have been verified.
 CONFIG_PULSELINK_COMMISSIONING_ENABLED=y
+CONFIG_PULSELINK_BUILD_PROFILE="staging"
 CONFIG_PULSELINK_COMMISSIONING_BUTTON_GPIO=5
 CONFIG_PULSELINK_BUTTON_GPIO=4
 CONFIG_PULSELINK_DEVICE_IDENTITY_NVS_PROVIDER=y

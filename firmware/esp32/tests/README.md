@@ -22,6 +22,11 @@ cc -std=c17 -Wall -Wextra -Werror -I main `
 tests/device_identity_test.exe
 ```
 
+The identity test asserts the cross-runtime vector `02:11:22:33:44:55` →
+`pl-021122334455`, byte order, deterministic repeatability and invalid output
+buffer/input handling. This is source-level compatibility evidence, not a
+connected ESP32 hardware test.
+
 This runner also reads `tests/fixtures/device_enrollment_v1.hex` and verifies
 that the firmware enrollment transcript encoder matches the backend's shared
 P-256 enrollment transcript bytes. The fixture contains only public test data
@@ -92,7 +97,7 @@ docker run --rm --network none --read-only `
   "cc -std=c17 -Wall -Wextra -Werror -I main tests/commissioning_crypto_host_test.c -lcrypto -o /tmp/crypto && /tmp/crypto"
 ```
 
-Run the full ten-runner firmware host suite (including the shared crypto
+Run the full host suite (including the shared crypto
 fixture) from the repository root with:
 
 ```powershell
@@ -105,3 +110,10 @@ docker run --rm --network none --read-only `
 The Android side is run with `:owner:testDebugUnitTest`; both tests read the
 same repository fixture. This proves host C/Java value compatibility, not board
 runtime, secure storage or SoftAP transport behavior.
+
+The authenticated status policy requires the exact Device ID plus
+`PROVISIONED` and `ENROLLED`. The status request is bearer-authenticated;
+`Device.deviceKey` is the operational credential value and must not be compared
+with the local identity public key. After a successful authenticated status
+probe, blocked queue slots are retried with their original event IDs and
+payloads; no event data is deleted.

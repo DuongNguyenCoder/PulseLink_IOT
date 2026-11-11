@@ -24,6 +24,7 @@ typedef bool (*commissioning_backend_probe_start_t)(
     uint32_t generation
 );
 typedef void (*commissioning_backend_probe_cancel_t)(void *context);
+typedef void (*commissioning_backend_authenticated_t)(void *context);
 
 typedef struct {
     commissioning_backend_probe_start_t start;
@@ -37,6 +38,8 @@ typedef struct {
     void *ops_context;
     uint32_t generation;
     bool pending;
+    commissioning_backend_authenticated_t authenticated;
+    void *authenticated_context;
 } commissioning_backend_reachability_t;
 
 bool commissioning_backend_reachability_init(
@@ -45,6 +48,12 @@ bool commissioning_backend_reachability_init(
     commissioning_credential_storage_t *credential_storage,
     const commissioning_backend_probe_ops_t *ops,
     void *ops_context
+);
+
+void commissioning_backend_reachability_set_authenticated_callback(
+    commissioning_backend_reachability_t *reachability,
+    commissioning_backend_authenticated_t callback,
+    void *context
 );
 
 bool commissioning_backend_reachability_start(
@@ -56,7 +65,6 @@ bool commissioning_backend_reachability_start_https(
     commissioning_backend_reachability_t *reachability,
     const char *base_url,
     const char *expected_device_id,
-    const char *expected_device_key,
     uint32_t timeout_ms
 );
 

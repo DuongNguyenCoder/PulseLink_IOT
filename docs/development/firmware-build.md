@@ -144,8 +144,8 @@ overwritten:
 This profile enables the existing ordinary-NVS identity and operational-token
 providers. It does not encrypt NVS, attest genuine hardware, or prove runtime
 recovery; flash extraction can disclose those values. The build is not flash
-authorization. For Owner push delivery, staging backend configuration must use
-`NOTIFICATION_RECIPIENT_MODE=account`; repository default remains `legacy`.
+authorization. Owner push delivery is Account-centric: the backend resolves
+active Store memberships to active AppInstallations.
 
 For first claim, hold the separate commissioning input (GPIO5 in the staging
 profile) active-low for at least 1.5 seconds, then release it. The 30-second

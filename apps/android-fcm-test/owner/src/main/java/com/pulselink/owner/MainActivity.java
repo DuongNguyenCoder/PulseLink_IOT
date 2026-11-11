@@ -3,6 +3,7 @@ package com.pulselink.owner;
 import android.app.Activity;
 import android.Manifest;
 import android.net.Network;
+import android.net.ConnectivityManager;
 import android.os.Build;
 import android.os.Bundle;
 import com.google.mlkit.vision.codescanner.GmsBarcodeScanner;
@@ -31,6 +32,8 @@ public final class MainActivity extends Activity {
     private EditText deviceId;
     private EditText softApSsid, wifiSsid, wifiPassword;
     private TextView status, stores, devices;
+    private EditText invitationEmail, invitationToken;
+    private TextView invitations;
     private SoftApConnection softApConnection;
     private CommissioningTransportClient transportClient;
     private JSONObject provisioningData;
@@ -59,6 +62,14 @@ public final class MainActivity extends Activity {
         storeName = input("New Store name"); root.addView(storeName); storeSlug = input("New Store slug"); root.addView(storeSlug);
         root.addView(button("Create Store", v -> createStore())); root.addView(button("Refresh Stores", v -> loadStores()));
         storeId = input("Selected Store ID"); root.addView(storeId);
+        root.addView(label("Store invitations (Owner creates; recipient pastes token)"));
+        invitationEmail = input("Invitee email"); root.addView(invitationEmail);
+        invitations = label("No invitations loaded"); root.addView(invitations);
+        root.addView(button("Create STAFF invitation", v -> createInvitation()));
+        root.addView(button("Refresh invitations", v -> loadInvitations()));
+        invitationToken = input("Invitation token"); root.addView(invitationToken);
+        root.addView(button("Inspect invitation", v -> inspectInvitation()));
+        root.addView(button("Accept invitation", v -> acceptInvitation()));
         root.addView(label("Devices")); devices = label("No devices loaded"); root.addView(devices);
         deviceName = input("Device display name"); root.addView(deviceName);
         root.addView(button("Refresh Devices", v -> loadDevices()));
@@ -68,7 +79,9 @@ public final class MainActivity extends Activity {
         root.addView(label("GPIO4 sends a Device Event. GPIO5 opens commissioning without erasing identity or credentials: on a new/unprovisioned board, hold for 1.5 seconds then release within the confirmation window; on an already provisioned board, reboot and do the same within 30 seconds after the recovery gate starts (after Wi-Fi initialization) to request reconfiguration. SoftAP lasts up to 5 minutes after it opens."));
         root.addView(button("Claim Device and prepare Wi-Fi", v -> claimScannedDevice()));
         root.addView(button("Create provisioning session", v -> createProvisioningSession()));
-        softApSsid = input("Device SoftAP SSID (for example PulseLink-XXXX)"); root.addView(softApSsid);
+        softApSsid = input("Device SoftAP (derived from linked Device ID)");
+        softApSsid.setEnabled(false);
+        root.addView(softApSsid);
         wifiSsid = input("Test Wi-Fi SSID"); root.addView(wifiSsid);
         wifiPassword = input("Test Wi-Fi password"); wifiPassword.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD); root.addView(wifiPassword);
         root.addView(button("Connect and send encrypted Wi-Fi configuration", v -> provisionOverSoftAp()));
@@ -97,6 +110,33 @@ public final class MainActivity extends Activity {
     }
     private void loadStores() { run("Loading stores", () -> { JSONArray a=api().stores(requireAccess()); return format(a,"id","name"); }); }
     private void createStore() { run("Creating store", () -> { api().createStore(requireAccess(),storeName.getText().toString().trim(),storeSlug.getText().toString().trim(),""); return "Store created as OWNER. Refresh stores."; }); }
+    private void createInvitation() {
+        String selectedStore = storeId.getText().toString().trim();
+        String recipient = invitationEmail.getText().toString().trim();
+        if (selectedStore.isBlank() || recipient.isBlank()) { status.setText("Store ID and invitee email are required"); return; }
+        run("Creating STAFF invitation", () -> {
+            JSONObject result = api().createInvitation(requireAccess(), selectedStore, recipient);
+            JSONObject data = result.optJSONObject("data");
+            String token = data == null ? "" : data.optString("token");
+            if (!token.isBlank()) invitationToken.setText(token);
+            return token.isBlank() ? "Invitation created. Share the one-time token from the issuance response." : "Invitation created. Copy the one-time token to the intended recipient.";
+        });
+    }
+    private void loadInvitations() {
+        String selectedStore = storeId.getText().toString().trim();
+        if (selectedStore.isBlank()) { status.setText("Select a Store ID first"); return; }
+        run("Loading invitations", () -> { JSONObject response = api().invitations(requireAccess(), selectedStore); return format(response.optJSONArray("data"), "id", "recipientEmailNormalized", "role", "status", "expiresAt"); });
+    }
+    private void inspectInvitation() {
+        String token = invitationToken.getText().toString().trim();
+        if (token.isBlank()) { status.setText("Enter an invitation token first"); return; }
+        run("Inspecting invitation", () -> { JSONObject response = api().inspectInvitation(token); return "Invitation: " + response.optJSONObject("data"); });
+    }
+    private void acceptInvitation() {
+        String token = invitationToken.getText().toString().trim();
+        if (token.isBlank()) { status.setText("Sign in as the intended recipient and enter an invitation token"); return; }
+        run("Accepting invitation", () -> { api().acceptInvitation(requireAccess(), token); return "Invitation accepted. Refresh Stores to verify STAFF membership."; });
+    }
     private void loadDevices() { String id=storeId.getText().toString().trim(); if(id.isBlank()){devices.setText("Select a Store ID first");return;} run("Loading devices", () -> format(api().devices(requireAccess(),id),"id","name","status","provisioningState","enrollmentStatus")); }
     private void createProvisioningSession() {
         String selectedStore = storeId.getText().toString().trim();
@@ -106,30 +146,40 @@ public final class MainActivity extends Activity {
             return;
         }
         run("Creating provisioning session", () -> {
-            JSONObject response = api().createProvisioningSession(
-                    requireAccess(), selectedStore, selectedDevice, UUID.randomUUID().toString());
-            JSONObject data = response.optJSONObject("data");
-            if (data == null || data.optJSONObject("session") == null
-                    || data.optString("deviceEnrollmentPublicKey").isBlank()) {
-                throw new ApiClient.ApiError(502, "Device trust material is unavailable");
-            }
-            JSONArray registeredDevices = api().devices(requireAccess(), selectedStore);
-            JSONObject selected = null;
-            for (int i = 0; i < registeredDevices.length(); i++) {
-                JSONObject candidate = registeredDevices.optJSONObject(i);
-                if (candidate != null && selectedDevice.equals(candidate.optString("id"))) { selected = candidate; break; }
-            }
-            if (selected == null || selected.optString("deviceKey").isBlank()) throw new ApiClient.ApiError(502, "Device redemption context is unavailable");
-            data.put("deviceKey", selected.optString("deviceKey"));
-            data.put("deviceId", selectedDevice);
-            data.put("storeId", selectedStore);
-            provisioningData = data;
-            commissioningRun++;
-            if (!commissioning.start(System.currentTimeMillis(), 30 * 60_000L)) {
-                throw new ApiClient.ApiError(409, "A commissioning session is already active");
-            }
+            provisioningData = fetchProvisioningData(selectedStore, selectedDevice);
+            startCommissioningLifecycle();
             return "Provisioning session ready; confirm the device physically before continuing.";
         });
+    }
+
+    private JSONObject fetchProvisioningData(String selectedStore, String selectedDevice) throws Exception {
+        String access = requireAccess();
+        JSONObject response = api().createProvisioningSession(access, selectedStore, selectedDevice,
+                UUID.randomUUID().toString());
+        JSONObject data = response.optJSONObject("data");
+        if (data == null || data.optJSONObject("session") == null
+                || data.optString("deviceEnrollmentPublicKey").isBlank()) {
+            throw new ApiClient.ApiError(502, "Device trust material is unavailable");
+        }
+        JSONArray registeredDevices = api().devices(access, selectedStore);
+        JSONObject selected = null;
+        for (int i = 0; i < registeredDevices.length(); i++) {
+            JSONObject candidate = registeredDevices.optJSONObject(i);
+            if (candidate != null && selectedDevice.equals(candidate.optString("id"))) { selected = candidate; break; }
+        }
+        if (selected == null || selected.optString("deviceKey").isBlank())
+            throw new ApiClient.ApiError(502, "Device redemption context is unavailable");
+        data.put("deviceKey", selected.optString("deviceKey"));
+        data.put("deviceId", selectedDevice);
+        data.put("storeId", selectedStore);
+        return data;
+    }
+
+    private void startCommissioningLifecycle() throws ApiClient.ApiError {
+        commissioningRun++;
+        if (!commissioning.start(System.currentTimeMillis(), 30 * 60_000L)) {
+            throw new ApiClient.ApiError(409, "A commissioning session is already active");
+        }
     }
 
     private void scanDeviceQr() {
@@ -222,8 +272,10 @@ public final class MainActivity extends Activity {
         executor.execute(() -> {
             String stage = "api";
             try {
-                JSONObject claimData = api().createDeviceClaimSession(requireAccess(), selectedStore, candidateId, displayName).getJSONObject("data");
-                if (claimData.optBoolean("alreadyClaimed")) {
+                JSONObject claimEnvelope = api().createDeviceClaimSession(requireAccess(), selectedStore, candidateId, displayName);
+                ClaimStartResponse parsedClaim = ClaimStartResponse.parse(claimEnvelope, candidateId, selectedStore);
+                JSONObject claimData = parsedClaim.data;
+                if (parsedClaim.alreadyClaimed) {
                     JSONObject linked = claimData.getJSONObject("device");
                     pendingDeviceClaimId = null;
                     runOnUiThread(() -> {
@@ -233,10 +285,7 @@ public final class MainActivity extends Activity {
                     });
                     return;
                 }
-                JSONObject claimSession = claimData.getJSONObject("session");
-                if (claimSession.optString("id").isBlank() || claimData.optString("challenge").isBlank()) {
-                    throw new IllegalStateException("Claim response missing required fields");
-                }
+                JSONObject claimSession = parsedClaim.session;
                 String ssid = DeviceQrIdentity.softApSsid(candidateId);
                 if (ssid == null) throw new IllegalStateException("Device QR identity is not supported by this firmware profile");
                 runOnUiThread(() -> status.setText("Connect to the Device SoftAP to verify its first-claim proof…"));
@@ -245,15 +294,15 @@ public final class MainActivity extends Activity {
                 stage = "softap";
                 softApConnection.connect(ssid, new SoftApConnection.Listener() {
                     @Override public void onAvailable(Network network) {
-                        executor.execute(() -> finishDeviceClaim(selectedStore, candidateId, claimData, claimSession));
+                        executor.execute(() -> finishDeviceClaim(selectedStore, candidateId, claimData, claimSession, network));
                     }
                     @Override public void onUnavailable() {
                         pendingDeviceClaimId = candidateId;
-                        runOnUiThread(() -> status.setText("Device SoftAP unavailable. Verify the board is in pairing mode and retry."));
+                        runOnUiThread(() -> status.setText("Android did not complete the SoftAP connection. Keep the pairing window open, accept the Wi-Fi prompt, and retry."));
                     }
                     @Override public void onLost() {
                         pendingDeviceClaimId = candidateId;
-                        runOnUiThread(() -> status.setText("Device SoftAP connection lost. Claim was not confirmed."));
+                        runOnUiThread(() -> status.setText("Android lost the SoftAP connection before claim proof completed. Keep the pairing window open and retry."));
                     }
                 });
             } catch (Exception failure) {
@@ -264,14 +313,20 @@ public final class MainActivity extends Activity {
         });
     }
 
-    private void finishDeviceClaim(String selectedStore, String candidateId, JSONObject claimData, JSONObject claimSession) {
+    private void finishDeviceClaim(String selectedStore, String candidateId, JSONObject claimData, JSONObject claimSession, Network network) {
+        String stage = "device_proof";
         try {
             CommissioningTransportClient proofClient = new CommissioningTransportClient();
-            JSONObject proof = proofClient.requestEnrollmentProof("http://192.168.4.1", claimData);
+            JSONObject proof = proofClient.requestEnrollmentProof("http://192.168.4.1", claimData, network);
             proofClient.close();
-            if (softApConnection != null) softApConnection.close();
+            stage = "internet_handoff";
+            if (softApConnection == null || !softApConnection.releaseAndAwaitInternet(15_000L)) {
+                throw new IllegalStateException("Internet network did not return after SoftAP release");
+            }
+            stage = "backend_claim_completion";
             JSONObject result = api().completeDeviceClaim(requireAccess(), selectedStore,
                     claimSession.getString("id"), proof);
+            stage = "provisioning_session";
             JSONObject claimedDevice = result.getJSONObject("data");
             JSONObject provisioning = api().createProvisioningSession(requireAccess(), selectedStore,
                     candidateId, UUID.randomUUID().toString()).getJSONObject("data");
@@ -304,17 +359,40 @@ public final class MainActivity extends Activity {
         } catch (Exception failure) {
             if (softApConnection != null) softApConnection.close();
             pendingDeviceClaimId = candidateId;
-            runOnUiThread(() -> status.setText("Device proof or claim failed. Device was not confirmed in this Store; scan and retry."));
+            String userMessage = CommissioningFailure.describeClaim(stage, failure);
+            runOnUiThread(() -> status.setText(userMessage));
         }
     }
     private void provisionOverSoftAp() {
         JSONObject data = provisioningData;
         long run = commissioningRun;
-        String ssid = softApSsid.getText().toString().trim();
+        String deviceIdValue = data == null ? "" : data.optString("deviceId", "");
+        String ssid = DeviceQrIdentity.softApSsid(deviceIdValue);
         String stationSsid = wifiSsid.getText().toString();
         String stationPassword = wifiPassword.getText().toString();
-        if (data == null || ssid.isBlank() || stationSsid.isBlank() || stationPassword.length() < 8) {
-            status.setText("Create a provisioning session and enter valid SoftAP/Wi-Fi details first"); return;
+        if (ssid == null || stationSsid.isBlank() || stationPassword.length() < 8) {
+            status.setText("A valid linked Device and venue Wi-Fi details are required"); return;
+        }
+        if (data == null) {
+            String selectedStore = storeId.getText().toString().trim();
+            String selectedDevice = deviceIdValue;
+            if (selectedStore.isBlank() || selectedDevice.isBlank()) {
+                status.setText("Select the Store and linked Device before connecting"); return;
+            }
+            status.setText("Refreshing a provisioning session for the linked Device…");
+            executor.execute(() -> {
+                try {
+                    provisioningData = fetchProvisioningData(selectedStore, selectedDevice);
+                    startCommissioningLifecycle();
+                    runOnUiThread(() -> {
+                        status.setText("Fresh provisioning session ready. Connecting to Device SoftAP…");
+                        provisionOverSoftAp();
+                    });
+                } catch (Exception failure) {
+                    postStatus("Could not prepare Wi-Fi setup. Confirm the Device is linked to this Store, then refresh Devices.");
+                }
+            });
+            return;
         }
         String wifiPermission = Build.VERSION.SDK_INT >= 33
                 ? Manifest.permission.NEARBY_WIFI_DEVICES : Manifest.permission.ACCESS_FINE_LOCATION;
@@ -341,22 +419,33 @@ public final class MainActivity extends Activity {
                         CommissioningTransportClient client = new CommissioningTransportClient();
                         transportClient = client;
                         boolean accepted = false;
+                        boolean pollBackend = false;
                         try {
                             JSONObject session = data.getJSONObject("session");
                             client.handshake("http://192.168.4.1", session.getString("id"),
                                     data.getString("deviceEnrollmentPublicKey"), data.getString("challenge"),
                                     parseExpiry(session.optString("expiresAt")),
-                                    "owner-android");
+                                    "owner-android", network);
                             if (!commissioning.transition(CommissioningLifecycle.State.SENDING_CONFIGURATION, System.currentTimeMillis())) throw new IllegalStateException("Commissioning state expired");
                             runOnUiThread(() -> status.setText("Sending encrypted Wi-Fi configuration…"));
                             client.sendCredentials("http://192.168.4.1", stationSsid, stationPassword,
-                                    data.getString("deviceId"), data.getString("deviceKey"), data.getString("bootstrapSecret"));
+                                    data.getString("deviceId"), data.getString("deviceKey"), data.getString("bootstrapSecret"), network);
                             if (!commissioning.transition(CommissioningLifecycle.State.DEVICE_CONNECTING_WIFI, System.currentTimeMillis())) throw new IllegalStateException("Commissioning state expired");
                             accepted = true;
+                            pollBackend = true;
                             runOnUiThread(() -> status.setText("Encrypted configuration accepted by the device; waiting for backend confirmation."));
                         } catch (Exception error) {
-                            commissioning.fail();
-                            runOnUiThread(() -> status.setText(error.getMessage() == null ? "Commissioning failed" : error.getMessage()));
+                            boolean credentialsMayHaveReachedDevice = error instanceof CommissioningRequestTimeout
+                                    && "credentials".equals(((CommissioningRequestTimeout) error).stage);
+                            if (credentialsMayHaveReachedDevice &&
+                                    commissioning.transition(CommissioningLifecycle.State.DEVICE_CONNECTING_WIFI, System.currentTimeMillis())) {
+                                pollBackend = true;
+                                runOnUiThread(() -> status.setText(CommissioningFailure.describeProvisioning(error)));
+                            } else {
+                                commissioning.fail();
+                                String failureMessage = CommissioningFailure.describeProvisioning(error);
+                                runOnUiThread(() -> status.setText(failureMessage));
+                            }
                             client.close();
                         } finally {
                             provisioningData = null;
@@ -369,13 +458,21 @@ public final class MainActivity extends Activity {
                             runOnUiThread(() -> wifiPassword.setText(""));
                             if (softApConnection != null) softApConnection.close();
                         }
-                        if (accepted && run == commissioningRun) {
+                        if (pollBackend && run == commissioningRun) {
                             executor.execute(() -> awaitBackendDeviceStatus(data, run));
                         }
                     });
                 }
-                @Override public void onUnavailable() { commissioning.fail(); runOnUiThread(() -> status.setText("Device SoftAP unavailable")); }
-                @Override public void onLost() { commissioning.fail(); runOnUiThread(() -> status.setText("Device SoftAP connection lost")); }
+                @Override public void onUnavailable() {
+                    boolean retryable = commissioning.retrySoftApConnection(System.currentTimeMillis());
+                    runOnUiThread(() -> status.setText(retryable
+                            ? "Android did not provide the Device Wi-Fi network within 30 seconds. Check whether a system Wi-Fi prompt appeared; if not, open Wi-Fi settings and confirm the matching PulseLink network is visible. Keep the board nearby and its 5-minute SoftAP window open, then retry."
+                            : "The commissioning session expired. Create a fresh provisioning session and retry."));
+                }
+                @Override public void onLost() {
+                    commissioning.fail();
+                    runOnUiThread(() -> status.setText("Android lost the Device SoftAP connection before Wi-Fi setup. Reconnect while its commissioning window is open; if expired, reopen pairing with GPIO5 after reboot."));
+                }
             });
         } catch (Exception error) { status.setText(error.getMessage() == null ? "SoftAP connection failed" : error.getMessage()); }
     }
@@ -394,6 +491,15 @@ public final class MainActivity extends Activity {
             String selectedStore = data.getString("storeId");
             String selectedDevice = data.getString("deviceId");
             String access = requireAccess();
+            ConnectivityManager connectivity = (ConnectivityManager) getSystemService(CONNECTIVITY_SERVICE);
+            runOnUiThread(() -> status.setText("Device accepted Wi-Fi setup. Restoring phone Internet before checking backend status…"));
+            if (connectivity == null || !InternetNetworkWaiter.awaitDefaultInternet(connectivity, 30_000L)) {
+                if (run == commissioningRun) {
+                    commissioning.fail();
+                    runOnUiThread(() -> status.setText("Device accepted the local Wi-Fi handoff, but the phone did not regain validated Internet within 30 seconds. Check phone Wi-Fi/mobile data, then refresh Device status."));
+                }
+                return;
+            }
             long deadline = System.nanoTime() + TimeUnit.MINUTES.toNanos(5);
             boolean redemptionReported = false;
             while (run == commissioningRun && System.nanoTime() < deadline && !isFinishing() && !isDestroyed()) {

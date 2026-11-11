@@ -35,6 +35,7 @@ final class ApiClient {
     }
     JSONObject refresh(String token) throws Exception { return post("/v1/auth/refresh", json("refreshToken", token), null); }
     void logout(String token) throws Exception { post("/v1/auth/logout", json("refreshToken", token), null); }
+    JSONObject me(String access) throws Exception { return get("/v1/auth/me", access); }
     JSONArray stores(String access) throws Exception { return get("/v1/stores", access).optJSONArray("data"); }
     JSONObject createStore(String access, String name, String slug, String timezone) throws Exception {
         JSONObject body = json("name", name, "slug", slug);
@@ -42,8 +43,8 @@ final class ApiClient {
         return post("/v1/stores", body, access);
     }
     JSONArray devices(String access, String storeId) throws Exception { return get("/v1/stores/" + path(storeId) + "/devices", access).optJSONArray("data"); }
-    JSONObject createDevice(String access, String storeId, String name) throws Exception {
-        return post("/v1/stores/" + path(storeId) + "/devices", json("name", name), access);
+    JSONObject createDevice(String access, String storeId, String deviceId, String name) throws Exception {
+        return post("/v1/stores/" + path(storeId) + "/devices", json("deviceId", deviceId, "name", name), access);
     }
     JSONObject createDeviceClaimSession(String access, String storeId, String deviceId, String name) throws Exception {
         return post("/v1/stores/" + path(storeId) + "/device-claims",
@@ -55,6 +56,24 @@ final class ApiClient {
     JSONObject createProvisioningSession(String access, String storeId, String deviceId, String idempotencyKey) throws Exception {
         JSONObject body = json("deviceId", deviceId, "idempotencyKey", idempotencyKey);
         return post("/v1/stores/" + path(storeId) + "/provisioning-sessions", body, access);
+    }
+    JSONObject createInvitation(String access, String storeId, String email) throws Exception {
+        return post("/v1/stores/" + path(storeId) + "/invitations", json("email", email, "role", "STAFF"), access);
+    }
+    JSONObject invitations(String access, String storeId) throws Exception {
+        return get("/v1/stores/" + path(storeId) + "/invitations", access);
+    }
+    JSONObject inspectInvitation(String token) throws Exception {
+        return post("/v1/invitations/inspect", json("token", token), null);
+    }
+    JSONObject acceptInvitation(String access, String token) throws Exception {
+        return post("/v1/invitations/accept", json("token", token), access);
+    }
+    JSONObject revokeInvitation(String access, String storeId, String invitationId) throws Exception {
+        return post("/v1/stores/" + path(storeId) + "/invitations/" + path(invitationId) + "/revoke", null, access);
+    }
+    JSONObject resendInvitation(String access, String storeId, String invitationId) throws Exception {
+        return post("/v1/stores/" + path(storeId) + "/invitations/" + path(invitationId) + "/resend", null, access);
     }
     private JSONObject get(String path, String access) throws Exception { return request("GET", path, null, access); }
     private JSONObject post(String path, JSONObject body, String access) throws Exception { return request("POST", path, body, access); }

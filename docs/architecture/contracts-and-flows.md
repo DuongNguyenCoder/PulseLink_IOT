@@ -1,6 +1,6 @@
 # Contracts, Trust Boundaries, and Critical Flows
 
-## API conventions — proposed until confirmed in code
+## API conventions — confirmed for the current backend
 
 - Prefer an explicit `/v1` prefix for public API routes.
 - Validate request params, query, headers and body at the boundary using Zod.
@@ -9,16 +9,16 @@
 - Never expose stack traces, SQL details, credentials, or secrets in client errors.
 - Once deployed to firmware, maintain backward compatibility or explicitly version incompatible contract changes.
 
-Example response envelope (proposal; align with existing API if already established):
+Current response envelope:
 
 ```json
 {
   "data": {},
-  "requestId": "..."
+  "meta": { "requestId": "..." }
 }
 ```
 
-Example error envelope (proposal):
+Current error envelope:
 
 ```json
 {
@@ -27,7 +27,7 @@ Example error envelope (proposal):
     "message": "Request validation failed",
     "details": []
   },
-  "requestId": "..."
+  "error": { "code": "BAD_REQUEST", "message": "Bad request", "requestId": "..." }
 }
 ```
 

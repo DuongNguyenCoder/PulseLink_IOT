@@ -5,6 +5,12 @@ ID identifies a board; it is not an ownership credential. The backend verifies
 the signed first-claim proof and the signed-in account's OWNER access to the
 selected Store.
 
+The canonical public Device ID is `pl-` followed by the six-byte ESP32-S3 Wi-Fi
+station MAC in firmware byte order as twelve lowercase hexadecimal characters,
+for example `02:11:22:33:44:55` becomes `pl-021122334455`. This identity remains
+stable across reboot, Wi-Fi changes and reprovisioning. The operational device
+credential is separate and must never be derived from or replaced by this ID.
+
 ## Button wiring and behavior
 
 - **GPIO4 to GND: Event button.** Press and release once to request one Device
@@ -16,10 +22,10 @@ selected Store.
   bounded reconfiguration. This input does not enqueue a Device Event.
 - The staging firmware configures both as active-low inputs with internal
   pull-ups. Use a momentary switch to GND; never connect a GPIO to 5 V.
-- The GPIO mapping is verified in the staging firmware source/config and in the
-  flashed image. The carrier-board schematic and external switch wiring are not
-  available in the repository; confirm the actual board pads/wiring before
-  connecting switches. Software evidence does not prove electrical behavior.
+- The GPIO mapping is verified in the staging firmware source/config. RUN-048
+  did not read back or identify the image on the physical board. The
+  carrier-board schematic is not in the repository; the operator has reported
+  GPIO5-to-GND wiring, but electrical behavior has not been measured here.
 
 The physical-confirmation timer begins when the commissioning gate task starts
 after Wi-Fi initialization. A fresh GPIO5 press/release must be accepted within
@@ -32,8 +38,11 @@ commissioning.
 
 For a Device that already has a valid operational credential, startup first
 attempts authenticated backend recovery. GPIO5 is sampled during the first 30
-seconds after the reconfiguration gate starts. A valid hold/release cancels
-recovery and opens the same five-minute SoftAP window. This request does not
+seconds after the reconfiguration gate starts. Boot with GPIO5 released, wait
+for the `GPIO5 recovery gate task started` diagnostic, then make a fresh press,
+hold, and release. A button already LOW when the gate starts is deliberately
+ignored until released and pressed again. A valid hold/release cancels recovery
+and opens the same five-minute SoftAP window. This request does not
 erase Wi-Fi settings, operational credential, identity, pending Events, or
 Store ownership. The Owner must sign in and create a fresh provisioning session
 for the already-linked Device; the existing encrypted handshake and single-use
@@ -78,7 +87,8 @@ remain in ordinary NVS; no hardware-protected storage claim is made.
    linked to this same Store and its SoftAP commissioning window is currently
    active, tap **Create provisioning session** instead. A Device linked to
    another Store cannot be transferred by repeating claim.
-4. Enter the device SoftAP SSID shown by the app, the venue's 2.4-GHz Wi-Fi
+4. The app derives the device SoftAP SSID from the claimed Device ID; do not
+   edit it. Enter the venue's 2.4-GHz Wi-Fi
    SSID, and its password. Tap **Connect and send encrypted Wi-Fi
    configuration** and accept the Android Wi-Fi prompt. The phone's local
    commissioning channel uses the existing authenticated encrypted handshake.
@@ -98,29 +108,100 @@ remain in ordinary NVS; no hardware-protected storage claim is made.
    its process network binding after the local transfer; phone network
    selection can still be controlled by Android.
 8. Refresh Devices in the selected Store. Confirm the Device is ONLINE. Check
-   Android notification permission, account FCM registration and staging
-   `NOTIFICATION_RECIPIENT_MODE=account` if the push is not received. Do not
+   Android notification permission and account FCM registration if the push is
+   not received. Do not
    send a second button Event just to retry notification delivery.
 
 ## Retry and failure handling
 
-- **Claim could not start:** note whether the app says Store authorization,
-  Device state, SoftAP connection, or backend response failed. The app first
-  creates a short-lived claim challenge; a `DeviceClaimSession` row alone does
-  not mean the Device was linked. Board proof is fetched only after Android
-  connects to `PulseLink-XXXX`, and backend linking completes only after that
-  proof is accepted. If the SoftAP window elapsed, restart the commissioning
-  gesture and retry; do not reuse an expired claim session.
+- **Claim response does not match the app:** the app shows a safe response-check
+  code and backend request ID. Save both and give them to the staging deployment
+  maintainer; do not send the response body or challenge in screenshots/logs.
+  The current contract is
+  `201 { data: { session: { id, deviceId, storeId, expiresAt }, challenge },
+  meta: { requestId } }`. The challenge start only creates a short-lived
+  `DeviceClaimSession`; it does not create a Device–Store relationship. The app
+  must then connect to `PulseLink-XXXX`, obtain the board proof and call the
+  completion route. If a 2xx response had an unexpected shape, wait five minutes
+  for its challenge to expire before retrying. If the app says authorization or
+  state conflict instead, follow that specific error; do not change Store
+  ownership or retry repeatedly.
+- **Device absent from Store after claim-start:** this is expected until board
+  proof is accepted by the claim completion route. Refreshing Devices before
+  completion will show no record. Only after proof completion does the backend
+  create the Device with the Store relationship; the app then creates a
+  provisioning session separately.
+- **App says `Android did not connect to the Device SoftAP within 30 seconds`:**
+  the Owner app derives the SSID from the already linked Device ID and keeps the
+  provisioning session retryable when Android cannot satisfy its network
+  request. Accept the Android `PulseLink-XXXX` prompt, stay near the board, and
+  retry while its SoftAP is active. Android app logs use tag
+  `PulseLinkSoftAp` and contain only request/availability/IPv4/loss milestones,
+  not Wi-Fi passwords or tokens. Firmware accepts only one station at a time.
+  If the five-minute SoftAP window expired, reboot the unprovisioned board and
+  perform the GPIO5 hold/release within the initial 30-second confirmation
+  window, then create a fresh provisioning session if the old one expired.
+- **Phone joins SoftAP and gets DHCP, but then reports a local request timeout:**
+  this is beyond Android network acquisition. The current Owner build allows
+  20 seconds for each local HTTP stage and logs only stage names/status under
+  `PulseLinkCommissioningHttp`; firmware logs handshake receipt, safe rejection
+  reason, and elapsed response time under `pulselink-commissioning`. A handshake
+  timeout means Wi-Fi credentials were not sent: create a fresh provisioning
+  session (do not claim the Device again) and retry while SoftAP remains active.
+  A credentials-stage timeout is ambiguous because the board may have accepted
+  the encrypted payload; the app checks backend status instead of immediately
+  starting another session. Wait for its result and compare the redacted app
+  stage with board logs. Backend logs are not expected to show the local
+  handshake or credentials routes; only after the board accepts configuration
+  and gets venue Wi-Fi should it POST the authenticated session redemption.
+- **Second Connect tap says the provisioning session is missing:** after a
+  handshake/local-transport failure, create a fresh provisioning session from
+  the already linked Device. Do not repeat Device claim. The app now shows this
+  action explicitly.
 - **SoftAP disappears while claim is in progress:** firmware bounds the active
   SoftAP window to five minutes from successful SoftAP and HTTP server startup.
   Station reconnect requests are deferred while commissioning owns Wi-Fi mode.
-  If the app reports the SoftAP unavailable, check that it is still within
-  that window and retry from the Owner app. Do not switch GPIO4/GPIO5 roles or
-  erase NVS.
+  The Owner app gives Android up to 30 seconds to establish the requested
+  network and waits until DHCP assigns an IPv4 address before it sends the
+  local proof request. If it reports the SoftAP connection unavailable, keep
+  the five-minute board window active, accept the Android Wi-Fi prompt and
+  retry from the app. Do not switch GPIO4/GPIO5 roles or erase NVS.
+- **Board sent proof but backend has no `/complete` request:** after receiving
+  and verifying local proof, Android releases its process binding to the
+  Internet-less SoftAP and waits up to 15 seconds for the default network to
+  report Internet capability before sending HTTPS claim completion. If the
+  app reports that Internet did not return, restore venue Wi-Fi or mobile data
+  and retry claim completion after the current challenge expires. If it reports
+  backend rejection, refresh Devices and follow the displayed authorization or
+  conflict state; do not repeatedly start new claims.
 - **SoftAP not found:** confirm the board is powered and GPIO5 gesture was
   performed in the gate window. A held-at-start button must be released and
   pressed again. Restarting power restarts the commissioning window; it does
   not erase identity or NVS.
+- **Android denies the SoftAP network request:** install the current APK, grant
+  its Nearby Wi-Fi permission where Android requests it, and accept the
+  system's `PulseLink-XXXX` connection prompt. The app needs the manifest
+  network-state permissions to request/bind the local network. Do not use the
+  phone's Wi-Fi settings as a substitute for the app flow: a manual join can
+  produce an Android connectivity-probe `GET /` and expected 404, but it does
+  not fetch the signed proof or complete the backend claim. The app should show
+  the proof step after `onAvailable`; the firmware proof route is
+  `POST /v1/commissioning/enrollment-proof`.
+- **Device proof request is rejected:** current firmware logs a safe reason
+  code such as `claim_fields_invalid`, `device_identity_mismatch`,
+  `identity_key_unavailable`, `claim_transcript_invalid`, or
+  `identity_signature_failed`; none includes the submitted challenge or key.
+  Claim expiry is authoritative at the backend. The ESP32 does not use its
+  local wall clock to reject the first-claim proof because this runtime does
+  not initialize SNTP; it signs the backend challenge and the backend verifies
+  challenge, Device, Store, session and expiry before linking. If proof fails,
+  wait for the previous claim challenge to expire before creating another.
+- **Android blocks the local proof request as cleartext:** install the current
+  APK, which permits cleartext only to the ESP32 SoftAP address `192.168.4.1`;
+  all other destinations remain HTTPS-only. The local proof is signed by the
+  Device, and Wi-Fi credentials use the existing authenticated encrypted
+  commissioning channel. Do not enable cleartext globally or change the
+  staging API URL to HTTP.
 - **Board already has saved station configuration and operational credential:**
   startup attempts backend recovery and samples GPIO5 only during the first
   30-second startup window. Reboot without erasing NVS, hold GPIO5 to GND for

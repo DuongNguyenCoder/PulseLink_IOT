@@ -90,6 +90,14 @@ bool commissioning_transition(commissioning_context_t *context, commissioning_st
     return true;
 }
 
+bool commissioning_retry_handshake(commissioning_context_t *context) {
+    if (context == NULL || context->state != COMMISSIONING_RECEIVING_CONFIG || context->session_consumed) {
+        return false;
+    }
+    context->state = COMMISSIONING_SOFTAP_ACTIVE;
+    return true;
+}
+
 bool commissioning_consume_session(commissioning_context_t *context) {
     if (context == NULL || context->state != COMMISSIONING_REDEEMING || context->session_consumed) return false;
     context->session_consumed = true;

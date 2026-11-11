@@ -7,7 +7,7 @@ PulseLink is a service-call button system for cafes/restaurants. A physical ESP3
 ## Current agreed stack
 
 - Firmware: ESP32-S3-WROOM-1 N16R8, C/C++ with ESP-IDF, GPIO button, LED, Wi-Fi and NVS. WP08 adds a bounded persistent event retry queue; queue-full and NVS failure cases remain explicit limitations.
-- App: PulseLink Owner application for account access, Store/device management, onboarding and operational push notifications. The repository currently contains no mobile app source.
+- App: the repository contains an Android Owner diagnostic harness for integration testing; the production React Native Owner app remains a later WP7 deliverable.
 - API: Node.js ESM, TypeScript, Fastify 5, Zod, Fastify's Pino logger.
 - Database: PostgreSQL, Prisma 7.10, `@prisma/adapter-pg`, `pg`.
 - Notifications: Firebase Cloud Messaging (FCM).
@@ -27,7 +27,8 @@ PulseLink is a service-call button system for cafes/restaurants. A physical ESP3
 
 - `firmware/esp32/`: hardware and embedded behavior.
 - `server/api/`: HTTP API, domain services, persistence and notification integration.
-- `apps/mobile/`: Owner-facing mobile app (future; absent in the current repository).
+- `apps/mobile/`: reserved for the future React Native production Owner app.
+- `apps/android-fcm-test/owner/`: Android diagnostic Owner harness used for WP6 onboarding, SoftAP commissioning and FCM installation checks; it is not the production app.
 - `packages/contracts/`: shared, versioned contracts (future).
 - `infrastructure/docker/`: local service configuration.
 - `docs/`: architecture, standards, ADRs, runbooks and feature specs.
@@ -45,9 +46,12 @@ Do not add a distributed broker, Kubernetes, microservices, Redis or multi-tenan
 - Notifications can be retried; duplicate sends must be considered possible.
 - FCM registration tokens identify push destinations, not staff identity or authorization.
 - One Owner account may have multiple app installations; each installation has its own session and FCM token lifecycle.
-- Account/session, Store authorization and AppInstallation token-management runtime slices are implemented and test-backed; provisioning, event ingestion and FCM delivery remain future phases. This overview is not a production-readiness claim.
+- Account/session, Store authorization, Store invitations, Device claim/provisioning, event ingestion and AppInstallation notification runtime slices are implemented and covered by unit/contract tests. Physical hardware, real FCM delivery and production mobile UX remain owner-validation gates; this overview is not a production-readiness claim.
 - Device credentials, app-user credentials and bootstrap pairing secrets are separate trust artifacts.
 - A user may have memberships in multiple Stores; the backend derives active Store scope from authorized membership rather than trusting client-supplied role or Store data.
-- Owners manage device claim and transfer. MVP does not implement a separate Staff account or invitation workflow.
+- Owners manage device claim and transfer. Store invitations are separate from
+  memberships: only an active Owner can create/list/revoke/resend invitations,
+  invitations grant STAFF only, and access is granted only after the intended
+  authenticated Account accepts a valid invitation.
 - Secrets are never stored in plaintext when a hash or secret manager is appropriate.
 - Store timezone is for presentation/scheduling; event timestamps are UTC.

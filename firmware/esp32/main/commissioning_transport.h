@@ -36,6 +36,7 @@ bool commissioning_transport_is_running(const commissioning_transport_t *transpo
 
 struct commissioning_transport {
     void *server;
+    void *ap_netif;
     commissioning_context_t *lifecycle;
     device_identity_t *identity;
     commissioning_credentials_callback_t credentials_callback;

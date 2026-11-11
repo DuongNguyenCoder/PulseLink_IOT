@@ -37,7 +37,9 @@ Trong ESP-IDF PowerShell:
 
 ```powershell
 cd D:\project-PulseLink\firmware\esp32
-idf.py menuconfig
+idf.py -B build/profiles/default `
+  -D "SDKCONFIG=$((Join-Path (Get-Location) 'build/profiles/default/sdkconfig'))" `
+  -D "SDKCONFIG_DEFAULTS=$((Join-Path (Get-Location) 'sdkconfig.defaults'))" menuconfig
 ```
 
 Đặt:
@@ -53,18 +55,19 @@ http://192.168.1.171:3000/health/live
 ```
 
 Địa chỉ phải là IP LAN của máy chạy backend, không phải `127.0.0.1` và không
-phải IP Docker-only. URL được lưu trong `sdkconfig` local, không đưa vào
+phải IP Docker-only. URL được lưu trong `build/profiles/default/sdkconfig`, không đưa vào
 `sdkconfig.defaults` hoặc source.
 
 ## 3. Build, flash, monitor
 
 ```powershell
-idf.py build
-idf.py -p COM7 flash
-idf.py -p COM7 monitor -B 115200
+..\..\scripts\Build-FirmwareProfile.ps1 -Profile default
+..\..\scripts\Flash-FirmwareProfile.ps1 -Profile default -Port COM7
 ```
 
-Thay `COM7` bằng COM port thực tế.
+Thay `COM7` bằng port đã xác minh. Flash script yêu cầu xác nhận profile/hash;
+không dùng plain `idf.py build` hoặc `idf.py flash`. Monitor riêng sau khi xác
+nhận board bằng `idf.py -B build/profiles/default -p COM7 monitor -B 115200`.
 
 Log thành công cần có:
 

@@ -109,11 +109,12 @@ authenticated client can register or refresh a token through
 `POST /v1/installations/`.
 
 - App-user authentication, operator authorization and device authentication are separate concerns.
-- Owner authorization is Store-scoped; one Owner account may manage multiple Stores. A future membership model must preserve room for multiple members without making the Owner-only MVP depend on Staff UI.
+- Owner authorization is Store-scoped; one Owner account may manage multiple Stores. Store invitations are Owner-only and use the existing Account + StoreMembership model; an invitation is not membership until accepted.
 - A provisioning or ownership-changing operation must carry an authenticated operator identity and an unambiguous Store scope; missing or ambiguous scope fails closed.
-- Only an authorized Owner may claim or transfer a device. MVP does not implement a separate Staff account or invitation workflow.
+- Only an authorized Owner may claim or transfer a device. An invited Account receives STAFF membership only after authenticated acceptance; invitation tokens are high-entropy one-time values stored only as hashes.
 - Device event requests derive Store ownership from the authenticated device and must not accept a device-supplied Store as authority.
 - FCM registration tokens identify notification destinations only and do not grant access to users, devices or Stores.
+- New Device registration and claim requests use the canonical MAC-derived Device ID format `pl-` plus twelve lowercase hexadecimal characters; the ID is not a credential.
 - Store creation and metadata mutations require an active database membership; sensitive Store mutations append AuditEvent in the same transaction.
 - Each app installation has an independent session and FCM-token lifecycle; adding an installation must not require device re-claiming or rotate the ESP32 credential.
 - AppInstallation endpoints derive Account identity from the authenticated request. FCM ciphertext is never returned; a token already bound to another installation is rejected rather than silently rebound, and only one ACTIVE binding is allowed per fingerprint.

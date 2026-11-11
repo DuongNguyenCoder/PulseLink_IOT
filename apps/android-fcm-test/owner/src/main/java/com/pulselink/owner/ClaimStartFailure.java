@@ -5,6 +5,13 @@ final class ClaimStartFailure {
     private ClaimStartFailure() {}
 
     static String describe(String stage, Exception failure) {
+        if (failure instanceof ClaimStartResponse.ContractException) {
+            ClaimStartResponse.ContractException contractFailure = (ClaimStartResponse.ContractException) failure;
+            return "The backend replied, but its Device claim response did not match this app. The Device was not linked; "
+                    + "response check=" + contractFailure.reason + "; a short-lived challenge may remain. "
+                    + "Wait five minutes before retrying. "
+                    + "Share request ID " + contractFailure.requestId + " with the deployment maintainer.";
+        }
         if (failure instanceof ApiClient.ApiError) {
             int status = ((ApiClient.ApiError) failure).status;
             if (status == 0) {
@@ -18,7 +25,7 @@ final class ClaimStartFailure {
             return "The backend rejected the claim request (HTTP " + status + ").";
         }
         if (stage.equals("softap")) {
-            if (failure instanceof SecurityException) return "Android denied the nearby Wi-Fi request. Grant Nearby Wi-Fi access and retry.";
+            if (failure instanceof SecurityException) return "Android denied the SoftAP network request. Check the app's Wi-Fi/network permissions and accept the Android system Wi-Fi prompt, then retry.";
             if (failure instanceof UnsupportedOperationException) return "Device commissioning requires Android 10 or newer.";
             return "The claim challenge was created, but Android could not start the SoftAP connection request. Retry while the Device SoftAP is active.";
         }

@@ -52,6 +52,19 @@ int main(void) {
     assert(physical_confirmation_state(&confirmation) == PHYSICAL_CONFIRMATION_ACCEPTED);
     assert(!physical_confirmation_start(&confirmation, 2100U));
 
+    // A button held before the gate starts is deliberately not a gesture.
+    // It must be released and pressed again after the gate has started.
+    physical_confirmation_init(&confirmation);
+    assert(physical_confirmation_start_level(&confirmation, true, 0U));
+    physical_confirmation_sample(&confirmation, false, 10U);
+    physical_confirmation_sample(&confirmation, false, 60U);
+    assert(physical_confirmation_state(&confirmation) == PHYSICAL_CONFIRMATION_WAITING);
+    physical_confirmation_sample(&confirmation, true, 100U);
+    physical_confirmation_sample(&confirmation, true, 150U);
+    physical_confirmation_sample(&confirmation, false, 1700U);
+    physical_confirmation_sample(&confirmation, false, 1750U);
+    assert(physical_confirmation_state(&confirmation) == PHYSICAL_CONFIRMATION_ACCEPTED);
+
     // Expiry is inclusive at the 30-second boundary and is terminal.
     physical_confirmation_init(&confirmation);
     assert(physical_confirmation_start(&confirmation, 0U));

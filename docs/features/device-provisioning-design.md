@@ -20,8 +20,8 @@ The repository currently contains:
   mobile source, or ESP32 source implementation. The `firmware/esp32`,
   `apps/mobile` and `packages/contracts` trees currently contain no source that
   establishes a wire contract.
-- Legacy `StaffPushToken` remains separate. It is not mapped to AppInstallation
-  and is not part of provisioning.
+- Staff/StaffPushToken are not part of provisioning. Store authorization uses
+  Account and StoreMembership.
 
 The J.2 schema now represents enrollment/provisioning state separately from the
 existing operational status, stores enrollment public-key metadata, and adds a

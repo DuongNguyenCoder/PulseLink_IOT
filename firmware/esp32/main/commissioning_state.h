@@ -45,6 +45,7 @@ bool commissioning_start_softap_window(
 );
 bool commissioning_accept_physical(commissioning_context_t *context, uint32_t now_ms);
 bool commissioning_transition(commissioning_context_t *context, commissioning_state_t next);
+bool commissioning_retry_handshake(commissioning_context_t *context);
 bool commissioning_consume_session(commissioning_context_t *context);
 bool commissioning_expire_if_needed(commissioning_context_t *context, uint32_t now_ms);
 bool commissioning_cancel(commissioning_context_t *context);

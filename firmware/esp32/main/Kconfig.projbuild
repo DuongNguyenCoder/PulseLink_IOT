@@ -6,6 +6,13 @@ config PULSELINK_FIRMWARE_VERSION
     help
         Version printed at boot. Do not put secrets here.
 
+config PULSELINK_BUILD_PROFILE
+    string "Firmware build profile"
+    default "default"
+    help
+        Non-secret label embedded in the image to distinguish controlled
+        build profiles. Use the profile scripts to select default or staging.
+
 config PULSELINK_WIFI_SSID
     string "Wi-Fi SSID"
     default ""
@@ -48,11 +55,11 @@ config PULSELINK_DEVICE_TOKEN
         Never commit this value or print it in logs.
 
 config PULSELINK_BUTTON_GPIO
-    int "Button GPIO (-1 until the carrier board is verified)"
+    int "Event button GPIO"
     range -1 48
-    default -1
+    default 4
     help
-        Do not select a GPIO until the actual carrier-board schematic is confirmed.
+        MVP Event button mapping. Verify carrier-board wiring before hardware operation.
 
 config PULSELINK_STATUS_LED_GPIO
     int "Status LED GPIO (-1 until the carrier board is verified)"
@@ -63,14 +70,13 @@ config PULSELINK_STATUS_LED_GPIO
 
 config PULSELINK_COMMISSIONING_ENABLED
     bool "Enable button-gated SoftAP commissioning"
-    default n
+    default y
     select MBEDTLS_HKDF_C
     help
         Enables the physical-confirmation gate, SoftAP transport and commissioning
-        lifecycle when the selected build profile also enables identity and
-        operational credential providers. It does not protect NVS contents at
-        rest or verify carrier-board button wiring. Keep disabled in profiles
-        that do not provide the required runtime dependencies.
+        lifecycle. The MVP baseline uses the separately configurable NVS identity
+        and operational-credential providers. This does not protect NVS contents
+        at rest or verify carrier-board button wiring.
 
 config PULSELINK_COMMISSIONING_BUTTON_GPIO
     int "Commissioning button GPIO"
@@ -83,22 +89,24 @@ config PULSELINK_COMMISSIONING_BUTTON_GPIO
 
 config PULSELINK_DEVICE_IDENTITY_NVS_PROVIDER
     bool "Enable NVS device identity provider (private key is extractable without flash protection)"
-    default n
+    default y
     help
         Generates a unique P-256 identity on first boot and stores its key in
         the identity NVS namespace. This is an MVP proof-of-possession identity,
         not genuine-hardware attestation: raw flash access can clone the key
-        unless a separately approved flash protection policy is enabled. Keep
-        disabled by default. Corrupt or unreadable existing records fail closed.
+        unless a separately approved flash protection policy is enabled. This is
+        the approved MVP TOFU baseline, not protected-at-rest storage. Corrupt or
+        unreadable existing records fail closed.
 
 config PULSELINK_OPERATIONAL_CREDENTIAL_STORAGE
     bool "Enable operational credential persistence in NVS (not protected at rest by default)"
-    default n
+    default y
     help
         Enables per-device operational token persistence and read-back through
         the NVS storage provider. Without NVS_ENCRYPTION, the token is stored
         in ordinary NVS and is extractable from raw flash. This option does not
-        enable NVS encryption or claim protection at rest. Keep disabled unless
-        the deployment accepts that MVP limitation.
+        enable NVS encryption or claim protection at rest. The MVP accepts this
+        TOFU limitation; deployments needing at-rest protection must use a
+        separately approved encryption and recovery policy.
 
 endmenu

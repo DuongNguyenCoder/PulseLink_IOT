@@ -109,6 +109,10 @@ static void test_claim_payload_and_device_id(void) {
     char device_id[16];
     assert(device_provisioning_build_device_id(mac, device_id, sizeof(device_id)));
     assert(strcmp(device_id, "pl-021122334455") == 0);
+    assert(!device_provisioning_build_device_id(NULL, device_id, sizeof(device_id)));
+    assert(!device_provisioning_build_device_id(mac, device_id, 15U));
+    assert(device_provisioning_build_device_id(mac, device_id, sizeof(device_id)));
+    assert(strcmp(device_id, "pl-021122334455") == 0);
     assert(device_provisioning_build_claim_payload(payload, sizeof(payload), "bad\nid", "store-1",
         "claim-1", 7U, "key", challenge, 1793200000U, &length) == DEVICE_PROVISIONING_PAYLOAD_INVALID);
     assert(length == 0U);

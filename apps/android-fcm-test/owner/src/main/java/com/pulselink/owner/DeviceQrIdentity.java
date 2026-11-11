@@ -5,7 +5,7 @@ import java.util.regex.Pattern;
 
 /** Parses identity-only QR payloads. A valid ID never proves enrollment or ownership. */
 final class DeviceQrIdentity {
-    private static final Pattern DEVICE_ID = Pattern.compile("[A-Za-z0-9_-]{8,128}");
+    private static final Pattern DEVICE_ID = Pattern.compile("pl-[0-9a-f]{12}");
 
     private DeviceQrIdentity() {}
 
