@@ -2,6 +2,7 @@ import { Prisma } from "../../generated/prisma/client.js";
 import { writeAuditEvent } from "../../shared/audit.js";
 import {
   generateChallenge,
+  generateDeviceKey,
   generateOperationalToken,
   hashChallenge,
   hashDeviceToken,
@@ -132,7 +133,7 @@ export async function completeDeviceClaim(
       const device = await tx.device.create({
         data: {
           id: session.deviceId,
-          deviceKey: operationalToken,
+          deviceKey: generateDeviceKey(),
           deviceSecretHash: hashDeviceToken(operationalToken),
           name: session.name,
           type: "CALL_BUTTON",

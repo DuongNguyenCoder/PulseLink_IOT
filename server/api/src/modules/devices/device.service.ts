@@ -1,5 +1,6 @@
 import { Prisma } from "../../generated/prisma/client.js";
 import {
+  generateDeviceKey,
   generateOperationalToken,
   hashDeviceToken,
 } from "../provisioning/provisioning-crypto.js";
@@ -31,8 +32,8 @@ export interface DeviceDatabase {
     } | null>;
   };
   device: {
-    create(args: unknown): Promise<DeviceMetadata>;
-    findMany(args: unknown): Promise<DeviceMetadata[]>;
+    create(args: unknown): Promise<StoredDeviceRecord>;
+    findMany(args: unknown): Promise<StoredDeviceRecord[]>;
   };
   auditEvent: { create(args: unknown): Promise<unknown> };
   $transaction<T>(callback: (tx: DeviceDatabase) => Promise<T>): Promise<T>;
@@ -40,7 +41,6 @@ export interface DeviceDatabase {
 
 export interface DeviceMetadata {
   id: string;
-  deviceKey: string;
   name: string;
   type: "CALL_BUTTON";
   status: "PENDING" | "ONLINE" | "OFFLINE" | "DISABLED";
@@ -52,6 +52,22 @@ export interface DeviceMetadata {
   storeId: string;
   createdAt: Date;
   updatedAt: Date;
+}
+
+interface StoredDeviceRecord extends DeviceMetadata {
+  /** Public provisioning transcript context; never a bearer credential. */
+  deviceKey?: string;
+  /** SHA-256 verifier for the operational bearer credential. */
+  deviceSecretHash?: string;
+}
+
+function toDeviceMetadata(device: StoredDeviceRecord): DeviceMetadata {
+  const {
+    deviceKey: _deviceKey,
+    deviceSecretHash: _deviceSecretHash,
+    ...metadata
+  } = device;
+  return metadata;
 }
 
 export class DeviceAuthorizationError extends Error {
@@ -106,12 +122,12 @@ export async function createDeviceForOwner(
   try {
     return await db.$transaction(async (tx) => {
       await requireOwner(tx, accountId, storeId);
-      const deviceKey = generateOperationalToken();
+      const operationalToken = generateOperationalToken();
       const device = await tx.device.create({
         data: {
           id: input.deviceId,
-          deviceKey,
-          deviceSecretHash: hashDeviceToken(generateOperationalToken()),
+          deviceKey: generateDeviceKey(),
+          deviceSecretHash: hashDeviceToken(operationalToken),
           name: input.name,
           type: "CALL_BUTTON",
           status: "PENDING",
@@ -131,7 +147,7 @@ export async function createDeviceForOwner(
         requestId,
         metadata: { accountId, deviceId: device.id, outcome: "success" },
       });
-      return device;
+      return toDeviceMetadata(device);
     });
   } catch (error: unknown) {
     if (error instanceof DeviceAuthorizationError) throw error;
@@ -159,7 +175,6 @@ export async function listDevicesForOwner(
     orderBy: { createdAt: "asc" },
     select: {
       id: true,
-      deviceKey: true,
       name: true,
       type: true,
       status: true,
@@ -171,5 +186,5 @@ export async function listDevicesForOwner(
       createdAt: true,
       updatedAt: true,
     },
-  });
+  }).then((devices) => devices.map(toDeviceMetadata));
 }

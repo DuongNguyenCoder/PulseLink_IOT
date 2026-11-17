@@ -1,6 +1,6 @@
 import { Prisma } from "../../generated/prisma/client.js";
 import { writeAuditEvent } from "../../shared/audit.js";
-import { generateChallenge, generateOperationalToken, hashChallenge, hashDeviceToken, verifyDeviceClaimProof, } from "./provisioning-crypto.js";
+import { generateChallenge, generateDeviceKey, generateOperationalToken, hashChallenge, hashDeviceToken, verifyDeviceClaimProof, } from "./provisioning-crypto.js";
 import { ProvisioningError, requireOwner } from "./provisioning.service.js";
 import { isMacDerivedDeviceId } from "../devices/device-identity.js";
 ;
@@ -65,7 +65,7 @@ export async function completeDeviceClaim(db, accountId, storeId, claimSessionId
             const device = await tx.device.create({
                 data: {
                     id: session.deviceId,
-                    deviceKey: operationalToken,
+                    deviceKey: generateDeviceKey(),
                     deviceSecretHash: hashDeviceToken(operationalToken),
                     name: session.name,
                     type: "CALL_BUTTON",

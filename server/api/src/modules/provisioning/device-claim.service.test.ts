@@ -74,7 +74,7 @@ describe("Owner Device claim lifecycle", () => {
     expect(claimed).toMatchObject({ id: h.session.deviceId, storeId: "store-1", enrollmentStatus: "ENROLLED", status: "PENDING" });
     const issuedCredential = h.getCreatedCredential();
     expect(issuedCredential).not.toBeNull();
-    expect(issuedCredential?.deviceSecretHash).toBe(hashDeviceToken(issuedCredential!.deviceKey));
+    expect(issuedCredential?.deviceSecretHash).not.toBe(hashDeviceToken(issuedCredential!.deviceKey));
   });
 
   it("rejects wrong Store proof, expired challenge, and unauthorized Owner", async () => {

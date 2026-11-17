@@ -1,7 +1,11 @@
 import { Prisma } from "../../generated/prisma/client.js";
-import { generateOperationalToken, hashDeviceToken, } from "../provisioning/provisioning-crypto.js";
+import { generateDeviceKey, generateOperationalToken, hashDeviceToken, } from "../provisioning/provisioning-crypto.js";
 import { writeAuditEvent } from "../../shared/audit.js";
 import { isMacDerivedDeviceId } from "./device-identity.js";
+function toDeviceMetadata(device) {
+    const { deviceKey: _deviceKey, deviceSecretHash: _deviceSecretHash, ...metadata } = device;
+    return metadata;
+}
 export class DeviceAuthorizationError extends Error {
     statusCode;
     constructor(message, statusCode) {
@@ -41,12 +45,12 @@ export async function createDeviceForOwner(db, accountId, storeId, input, reques
     try {
         return await db.$transaction(async (tx) => {
             await requireOwner(tx, accountId, storeId);
-            const deviceKey = generateOperationalToken();
+            const operationalToken = generateOperationalToken();
             const device = await tx.device.create({
                 data: {
                     id: input.deviceId,
-                    deviceKey,
-                    deviceSecretHash: hashDeviceToken(generateOperationalToken()),
+                    deviceKey: generateDeviceKey(),
+                    deviceSecretHash: hashDeviceToken(operationalToken),
                     name: input.name,
                     type: "CALL_BUTTON",
                     status: "PENDING",
@@ -66,7 +70,7 @@ export async function createDeviceForOwner(db, accountId, storeId, input, reques
                 requestId,
                 metadata: { accountId, deviceId: device.id, outcome: "success" },
             });
-            return device;
+            return toDeviceMetadata(device);
         });
     }
     catch (error) {
@@ -86,7 +90,6 @@ export async function listDevicesForOwner(db, accountId, storeId) {
         orderBy: { createdAt: "asc" },
         select: {
             id: true,
-            deviceKey: true,
             name: true,
             type: true,
             status: true,
@@ -98,5 +101,5 @@ export async function listDevicesForOwner(db, accountId, storeId) {
             createdAt: true,
             updatedAt: true,
         },
-    });
+    }).then((devices) => devices.map(toDeviceMetadata));
 }

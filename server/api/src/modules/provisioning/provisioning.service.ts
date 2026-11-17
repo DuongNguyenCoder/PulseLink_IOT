@@ -283,6 +283,8 @@ export async function createProvisioningSession(
   now = new Date(),
 ): Promise<{
   session: SafeProvisioningSession;
+  /** Public protocol context; never a bearer credential. */
+  deviceKey: string;
   bootstrapSecret: string;
   challenge: string;
   deviceEnrollmentPublicKey: string;
@@ -338,10 +340,15 @@ export async function createProvisioningSession(
         metadata: { accountId, deviceId: input.deviceId, outcome: "success" },
         occurredAt: now,
       });
-      return { session, deviceEnrollmentPublicKey: device.enrollmentPublicKey };
+      return {
+        session,
+        deviceKey: device.deviceKey,
+        deviceEnrollmentPublicKey: device.enrollmentPublicKey,
+      };
     });
     return {
       session: safeSession(result.session),
+      deviceKey: result.deviceKey,
       bootstrapSecret,
       challenge,
       deviceEnrollmentPublicKey: result.deviceEnrollmentPublicKey,

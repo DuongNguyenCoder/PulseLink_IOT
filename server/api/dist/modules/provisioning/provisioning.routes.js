@@ -151,6 +151,7 @@ export const provisioningRoutes = async (app, options) => {
             return reply.code(201).send({
                 data: {
                     session: result.session,
+                    deviceKey: result.deviceKey,
                     bootstrapSecret: result.bootstrapSecret,
                     challenge: result.challenge,
                     deviceEnrollmentPublicKey: result.deviceEnrollmentPublicKey,

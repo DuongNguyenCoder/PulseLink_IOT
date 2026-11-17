@@ -8,6 +8,7 @@ import {
 const device = {
   id: "device-1",
   deviceKey: "generated-device-key",
+  deviceSecretHash: "hashed-operational-token",
   name: "Front button",
   type: "CALL_BUTTON" as const,
   status: "PENDING" as const,
@@ -75,6 +76,7 @@ describe("Owner device lifecycle", () => {
       storeId: "store-1",
       status: "PENDING",
     });
+    expect(created).not.toHaveProperty("deviceKey");
     expect(created).not.toHaveProperty("deviceSecretHash");
   });
 
@@ -90,6 +92,18 @@ describe("Owner device lifecycle", () => {
   it("lists only the authorized Store's device metadata", async () => {
     await expect(
       listDevicesForOwner(database(), "account-1", "store-1"),
-    ).resolves.toEqual([device]);
+    ).resolves.toEqual([{
+      id: device.id,
+      name: device.name,
+      type: device.type,
+      status: device.status,
+      provisioningState: device.provisioningState,
+      enrollmentStatus: device.enrollmentStatus,
+      firmwareVersion: device.firmwareVersion,
+      lastSeenAt: device.lastSeenAt,
+      storeId: device.storeId,
+      createdAt: device.createdAt,
+      updatedAt: device.updatedAt,
+    }]);
   });
 });

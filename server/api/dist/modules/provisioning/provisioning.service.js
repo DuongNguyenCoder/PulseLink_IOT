@@ -184,10 +184,15 @@ export async function createProvisioningSession(db, accountId, storeId, input, r
                 metadata: { accountId, deviceId: input.deviceId, outcome: "success" },
                 occurredAt: now,
             });
-            return { session, deviceEnrollmentPublicKey: device.enrollmentPublicKey };
+            return {
+                session,
+                deviceKey: device.deviceKey,
+                deviceEnrollmentPublicKey: device.enrollmentPublicKey,
+            };
         });
         return {
             session: safeSession(result.session),
+            deviceKey: result.deviceKey,
             bootstrapSecret,
             challenge,
             deviceEnrollmentPublicKey: result.deviceEnrollmentPublicKey,

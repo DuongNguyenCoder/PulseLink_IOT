@@ -133,3 +133,11 @@ export function hashDeviceToken(token) {
 export function generateOperationalToken() {
     return randomBytes(32).toString('base64url');
 }
+/**
+ * Public protocol context used in signed provisioning transcripts.
+ * This is deliberately distinct from the bearer credential whose verifier is
+ * stored in Device.deviceSecretHash.
+ */
+export function generateDeviceKey() {
+    return randomBytes(32).toString('base64url');
+}
