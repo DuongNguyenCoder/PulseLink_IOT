@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createStoreForOwner, getStoreForMember, updateStoreMetadata, type StoreDatabase, type StoreRecord } from './store.service.js';
+import { createStoreForOwner, getStoreForMember, listActiveStores, updateStoreMetadata, type StoreDatabase, type StoreRecord } from './store.service.js';
 
 function storeRecord(overrides: Partial<StoreRecord> = {}): StoreRecord {
   return {
@@ -14,7 +14,7 @@ function fakeDatabase(overrides: Partial<StoreDatabase> = {}): StoreDatabase {
     account: { findUnique: async () => ({ status: 'ACTIVE', emailVerifiedAt: new Date() }) },
     store: {
       create: async () => store,
-      findMany: async () => [store],
+      findMany: async () => [{ ...store, memberships: [{ role: 'OWNER' as const }] }],
       findUnique: async () => store,
       update: async () => store,
     },
@@ -52,5 +52,11 @@ describe('store service authorization', () => {
       storeMembership: { findFirst: async () => ({ id: 'm', accountId: 'account-1', storeId: 'store-1', role: 'STAFF', status: 'ACTIVE' }), create: async () => { throw new Error('unused'); } },
     });
     await expect(updateStoreMetadata(db, 'account-1', 'store-1', { name: 'New name' })).rejects.toMatchObject({ statusCode: 403 });
+  });
+
+  it('returns the authenticated account membership role with active stores', async () => {
+    const stores = await listActiveStores(fakeDatabase(), 'account-1');
+
+    expect(stores[0]).toMatchObject({ id: 'store-1', role: 'OWNER' });
   });
 });

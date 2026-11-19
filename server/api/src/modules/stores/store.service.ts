@@ -7,7 +7,7 @@ export interface StoreDatabase {
   };
   store: {
     create(args: { data: { name: string; slug: string; timezone?: string } }): Promise<StoreRecord>;
-    findMany(args: unknown): Promise<StoreRecord[]>;
+    findMany(args: unknown): Promise<StoreListRecord[]>;
     findUnique(args: unknown): Promise<StoreRecord | null>;
     update(args: unknown): Promise<StoreRecord>;
   };
@@ -29,6 +29,12 @@ export interface StoreRecord {
   isActive: boolean;
   createdAt: Date;
   updatedAt: Date;
+}
+
+type StoreMembershipRole = 'OWNER' | 'STAFF';
+
+interface StoreListRecord extends StoreRecord {
+  memberships?: Array<{ role: StoreMembershipRole }>;
 }
 
 export interface MembershipRecord {
@@ -130,10 +136,28 @@ export async function createStoreForOwner(
 
 export async function listActiveStores(db: StoreDatabase, accountId: string): Promise<StoreRecord[]> {
   await assertAccountCanManageStore(db, accountId);
-  return db.store.findMany({
+  const stores = await db.store.findMany({
     where: { isActive: true, memberships: { some: { accountId, status: 'ACTIVE' } } },
     orderBy: { createdAt: 'asc' },
+    select: {
+      id: true,
+      name: true,
+      slug: true,
+      timezone: true,
+      isActive: true,
+      createdAt: true,
+      updatedAt: true,
+      memberships: {
+        where: { accountId, status: 'ACTIVE' },
+        select: { role: true },
+        take: 1,
+      },
+    },
   });
+  return stores.map(({ memberships, ...store }) => ({
+    ...store,
+    role: memberships?.[0]?.role,
+  }));
 }
 
 export async function getStoreForMember(db: StoreDatabase, accountId: string, storeId: string): Promise<StoreRecord> {
