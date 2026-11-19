@@ -34,6 +34,11 @@ function harness(now: Date, storeId = "store-1") {
     } },
     device: {
       findUnique: async () => device,
+      update: async (args) => {
+        if (!device) throw new Error("device missing");
+        device = { ...device, ...(args as { data: Partial<ClaimedDeviceRecord> }).data, updatedAt: now };
+        return device;
+      },
       create: async (args) => {
         if (device) throw Object.assign(new Error("unique"), { code: "P2002" });
         const data = (args as { data: Partial<ClaimedDeviceRecord> & { id: string } }).data;
@@ -61,7 +66,8 @@ function harness(now: Date, storeId = "store-1") {
     deviceId: session.deviceId, storeId, claimSessionId: session.id, proof: proofBody,
   }), { key: keys.privateKey, dsaEncoding: "der" }).toString("base64");
   const proof: DeviceClaimProof = { ...proofBody, signatureDerBase64 };
-  return { db, session, challenge, proof, getDevice: () => device, getCreatedCredential: () => createdDeviceCredential };
+  return { db, session, challenge, proof, getDevice: () => device, getCreatedCredential: () => createdDeviceCredential,
+    setDevice: (value: ClaimedDeviceRecord) => { device = value; } };
 }
 
 describe("Owner Device claim lifecycle", () => {
@@ -102,5 +108,39 @@ describe("Owner Device claim lifecycle", () => {
       .rejects.toMatchObject({ statusCode: 401 });
     const repeatedStart = await createDeviceClaimSession(h.db, "owner-1", "store-1", h.session.deviceId, "Renamed", now);
     expect(repeatedStart).toMatchObject({ alreadyClaimed: true, device: { id: first.id, storeId: "store-1" } });
+  });
+
+  it("reuses a same-Store legacy placeholder during a verified claim", async () => {
+    const now = new Date("2026-10-29T03:00:00.000Z");
+    const h = harness(now);
+    h.setDevice({
+      id: h.session.deviceId,
+      deviceKey: "legacy-device-key",
+      deviceSecretHash: "legacy-secret-hash",
+      storeId: "store-1",
+      status: "PENDING",
+      provisioningState: "UNREGISTERED",
+      enrollmentStatus: "UNENROLLED",
+      enrollmentPublicKey: null,
+      enrollmentKeyVersion: null,
+      name: "Legacy placeholder",
+      type: "CALL_BUTTON",
+      firmwareVersion: null,
+      lastSeenAt: null,
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    const created = await createDeviceClaimSession(h.db, "owner-1", "store-1", h.session.deviceId, "Front button", now);
+    expect("session" in created).toBe(true);
+    if (!("session" in created)) throw new Error("expected claim session");
+    const claimed = await completeDeviceClaim(h.db, "owner-1", "store-1", created.session.id, h.challenge, h.proof, undefined, now);
+    expect(claimed).toMatchObject({
+      id: h.session.deviceId,
+      provisioningState: "READY",
+      enrollmentStatus: "ENROLLED",
+      name: "Front button",
+    });
+    expect(claimed.deviceKey).toBe("legacy-device-key");
   });
 });

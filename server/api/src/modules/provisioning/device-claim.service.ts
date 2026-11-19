@@ -45,6 +45,7 @@ export interface DeviceClaimDatabase {
   storeMembership: { findFirst(args: unknown): Promise<{ accountId: string; storeId: string; role: "OWNER" | "STAFF"; status: "ACTIVE" | "SUSPENDED" | "REVOKED" } | null> };
   device: {
     findUnique(args: unknown): Promise<ClaimedDeviceRecord | null>;
+    update(args: unknown): Promise<ClaimedDeviceRecord>;
     create(args: unknown): Promise<ClaimedDeviceRecord>;
   };
   deviceClaimSession: {
@@ -58,6 +59,11 @@ export interface DeviceClaimDatabase {
 
 function isUniqueViolation(error: unknown): boolean {
   return error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002";
+}
+
+function isClaimablePlaceholder(device: ClaimedDeviceRecord, storeId: string): boolean {
+  return device.storeId === storeId && device.status !== "DISABLED" &&
+    device.enrollmentStatus === "UNENROLLED" && device.provisioningState !== "REVOKED";
 }
 
 export async function createDeviceClaimSession(
@@ -78,7 +84,12 @@ export async function createDeviceClaimSession(
         existing.provisioningState !== "REVOKED" && existing.status !== "DISABLED") {
       return { alreadyClaimed: true, device: existing };
     }
-    throw new ProvisioningError("Device cannot be claimed", 409);
+    // Older onboarding created an UNREGISTERED/UNENROLLED placeholder before
+    // the proof-based claim flow. Keep that row and let the verified claim
+    // complete it instead of treating the stable Device ID as a collision.
+    if (!isClaimablePlaceholder(existing, storeId)) {
+      throw new ProvisioningError("Device cannot be claimed", 409);
+    }
   }
   const challenge = generateChallenge();
   const session = await db.deviceClaimSession.create({
@@ -121,31 +132,50 @@ export async function completeDeviceClaim(
             existing.enrollmentKeyVersion === proof.keyVersion) return existing;
         throw new ProvisioningError("Device cannot be claimed", 409);
       }
-      if (await tx.device.findUnique({ where: { id: session.deviceId }, select: { id: true } })) {
-        throw new ProvisioningError("Device cannot be claimed", 409);
-      }
       const consumed = await tx.deviceClaimSession.updateMany({
         where: { id: claimSessionId, storeId, actorAccountId: accountId, challengeHash: session.challengeHash, consumedAt: null, expiresAt: { gt: now } },
         data: { consumedAt: now },
       });
       if (consumed.count !== 1) throw new ProvisioningError("Device claim session already used", 409);
       const operationalToken = generateOperationalToken();
-      const device = await tx.device.create({
-        data: {
-          id: session.deviceId,
-          deviceKey: generateDeviceKey(),
-          deviceSecretHash: hashDeviceToken(operationalToken),
-          name: session.name,
-          type: "CALL_BUTTON",
-          status: "PENDING",
-          provisioningState: "READY",
-          enrollmentStatus: "ENROLLED",
-          enrollmentPublicKey: proof.publicKeySpkiBase64,
-          enrollmentKeyVersion: proof.keyVersion,
-          enrolledAt: now,
-          storeId,
-        },
-      });
+      const existing = await tx.device.findUnique({ where: { id: session.deviceId } });
+      let device: ClaimedDeviceRecord;
+      if (existing === null) {
+        device = await tx.device.create({
+          data: {
+            id: session.deviceId,
+            deviceKey: generateDeviceKey(),
+            deviceSecretHash: hashDeviceToken(operationalToken),
+            name: session.name,
+            type: "CALL_BUTTON",
+            status: "PENDING",
+            provisioningState: "READY",
+            enrollmentStatus: "ENROLLED",
+            enrollmentPublicKey: proof.publicKeySpkiBase64,
+            enrollmentKeyVersion: proof.keyVersion,
+            enrolledAt: now,
+            storeId,
+          },
+        });
+      } else {
+        if (!isClaimablePlaceholder(existing, storeId)) {
+          throw new ProvisioningError("Device cannot be claimed", 409);
+        }
+        device = await tx.device.update({
+          where: { id: session.deviceId },
+          data: {
+            deviceSecretHash: hashDeviceToken(operationalToken),
+            name: session.name,
+            status: "PENDING",
+            provisioningState: "READY",
+            enrollmentStatus: "ENROLLED",
+            enrollmentPublicKey: proof.publicKeySpkiBase64,
+            enrollmentKeyVersion: proof.keyVersion,
+            enrolledAt: now,
+            enrollmentRevokedAt: null,
+          },
+        });
+      }
       await writeAuditEvent(tx, {
         actorType: "ACCOUNT", actorId: accountId,
         action: "DEVICE_CLAIMED", resourceType: "DEVICE", resourceId: device.id,

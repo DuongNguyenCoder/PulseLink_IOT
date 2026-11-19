@@ -69,10 +69,28 @@ export async function createStoreForOwner(db, accountId, input, requestId) {
 }
 export async function listActiveStores(db, accountId) {
     await assertAccountCanManageStore(db, accountId);
-    return db.store.findMany({
+    const stores = await db.store.findMany({
         where: { isActive: true, memberships: { some: { accountId, status: 'ACTIVE' } } },
         orderBy: { createdAt: 'asc' },
+        select: {
+            id: true,
+            name: true,
+            slug: true,
+            timezone: true,
+            isActive: true,
+            createdAt: true,
+            updatedAt: true,
+            memberships: {
+                where: { accountId, status: 'ACTIVE' },
+                select: { role: true },
+                take: 1,
+            },
+        },
     });
+    return stores.map(({ memberships, ...store }) => ({
+        ...store,
+        role: memberships?.[0]?.role,
+    }));
 }
 export async function getStoreForMember(db, accountId, storeId) {
     await assertAccountCanManageStore(db, accountId);
