@@ -108,6 +108,34 @@ async function requireOwner(
     throw new DeviceAuthorizationError("Resource not found", 404);
 }
 
+async function requireDeviceReader(
+  db: DeviceDatabase,
+  accountId: string,
+  storeId: string,
+): Promise<void> {
+  const account = await db.account.findUnique({
+    where: { id: accountId },
+    select: { status: true, emailVerifiedAt: true },
+  });
+  if (account === null || account.status === "DISABLED")
+    throw new DeviceAuthorizationError("Authentication required", 401);
+  if (account.status !== "ACTIVE" || account.emailVerifiedAt === null) {
+    throw new DeviceAuthorizationError("Email verification required", 403);
+  }
+  const store = await db.store.findUnique({
+    where: { id: storeId },
+    select: { id: true, isActive: true },
+  });
+  if (store === null || !store.isActive)
+    throw new DeviceAuthorizationError("Resource not found", 404);
+  const membership = await db.storeMembership.findFirst({
+    where: { accountId, storeId, status: "ACTIVE", role: { in: ["OWNER", "STAFF"] } },
+    select: { accountId: true, storeId: true, role: true, status: true },
+  });
+  if (membership === null)
+    throw new DeviceAuthorizationError("Resource not found", 404);
+}
+
 export async function createDeviceForOwner(
   db: DeviceDatabase,
   accountId: string,
@@ -164,12 +192,12 @@ export async function createDeviceForOwner(
   }
 }
 
-export async function listDevicesForOwner(
+export async function listDevicesForMember(
   db: DeviceDatabase,
   accountId: string,
   storeId: string,
 ): Promise<DeviceMetadata[]> {
-  await requireOwner(db, accountId, storeId);
+  await requireDeviceReader(db, accountId, storeId);
   return db.device.findMany({
     where: { storeId },
     orderBy: { createdAt: "asc" },
@@ -188,3 +216,6 @@ export async function listDevicesForOwner(
     },
   }).then((devices) => devices.map(toDeviceMetadata));
 }
+
+/** @deprecated Keep the service name for integrations that still import it. */
+export const listDevicesForOwner = listDevicesForMember;

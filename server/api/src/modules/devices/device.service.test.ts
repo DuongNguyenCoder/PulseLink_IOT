@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   createDeviceForOwner,
-  listDevicesForOwner,
+  listDevicesForMember,
   type DeviceDatabase,
 } from "./device.service.js";
 
@@ -63,6 +63,14 @@ function database(): DeviceDatabase {
   };
 }
 
+function staffDatabase(): DeviceDatabase {
+  const db = database();
+  db.storeMembership.findFirst = async () => ({
+    accountId: "account-1", storeId: "store-1", role: "STAFF", status: "ACTIVE",
+  });
+  return db;
+}
+
 describe("Owner device lifecycle", () => {
   it("creates a Store-bound device without exposing a credential", async () => {
     const created = await createDeviceForOwner(
@@ -91,7 +99,7 @@ describe("Owner device lifecycle", () => {
 
   it("lists only the authorized Store's device metadata", async () => {
     await expect(
-      listDevicesForOwner(database(), "account-1", "store-1"),
+      listDevicesForMember(database(), "account-1", "store-1"),
     ).resolves.toEqual([{
       id: device.id,
       name: device.name,
@@ -105,5 +113,17 @@ describe("Owner device lifecycle", () => {
       createdAt: device.createdAt,
       updatedAt: device.updatedAt,
     }]);
+  });
+
+  it("allows an active STAFF member to read device metadata", async () => {
+    await expect(listDevicesForMember(staffDatabase(), "account-1", "store-1"))
+      .resolves.toHaveLength(1);
+  });
+
+  it("rejects a suspended or missing member from reading devices", async () => {
+    const db = database();
+    db.storeMembership.findFirst = async () => null;
+    await expect(listDevicesForMember(db, "account-1", "store-1"))
+      .rejects.toMatchObject({ statusCode: 404 });
   });
 });

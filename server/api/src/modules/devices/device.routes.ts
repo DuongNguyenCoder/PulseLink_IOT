@@ -5,7 +5,7 @@ import { createAuthenticationHook } from "../auth/auth-hook.js";
 import {
   DeviceAuthorizationError,
   createDeviceForOwner,
-  listDevicesForOwner,
+  listDevicesForMember,
 } from "./device.service.js";
 import { isMacDerivedDeviceId } from "./device-identity.js";
 
@@ -60,7 +60,7 @@ export const deviceRoutes: FastifyPluginAsync<DeviceRouteOptions> = async (
 
   app.get("/:storeId/devices", async (request, reply) => {
     const params = parseParams(request);
-    const devices = await listDevicesForOwner(
+    const devices = await listDevicesForMember(
       app.prisma as never,
       accountId(request),
       params.storeId,

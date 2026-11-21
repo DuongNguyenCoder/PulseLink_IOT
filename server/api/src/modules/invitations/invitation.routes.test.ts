@@ -12,7 +12,9 @@ function appWithDatabase(): ReturnType<typeof Fastify> {
         storeId: "store-1",
         role: "STAFF",
         status: "PENDING",
-        expiresAt: new Date("2026-11-15T00:00:00.000Z"),
+        // Keep the inspection fixture valid across calendar years; expiry behavior
+        // is covered by service tests with an explicit `now` value.
+        expiresAt: new Date("2030-11-15T00:00:00.000Z"),
         createdAt: new Date("2026-11-08T00:00:00.000Z"),
         store: { id: "store-1", name: "Cafe", slug: "cafe" },
       }),

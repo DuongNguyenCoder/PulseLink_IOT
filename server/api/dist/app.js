@@ -9,6 +9,7 @@ import { deviceEventRoutes } from "./modules/device-events/device-event.routes.j
 import { deviceRoutes } from "./modules/devices/device.routes.js";
 import { deviceStatusRoutes } from "./modules/device-status/device-status.routes.js";
 import { invitationRoutes } from "./modules/invitations/invitation.routes.js";
+import { notificationFeedRoutes } from "./modules/notifications/notification-feed.routes.js";
 import { createOperatorEnrollmentAuthorizer } from "./modules/provisioning/operator-authorization.js";
 import { emailVerificationRoutes, registerVerificationFormParser, } from "./modules/auth/email-verification.routes.js";
 import { registerPrisma } from "./plugins/prisma.js";
@@ -79,6 +80,10 @@ export async function buildApp(options) {
     await app.register(deviceStatusRoutes, { prefix: "/v1" });
     await app.register(invitationRoutes, {
         prefix: "/v1",
+        verificationKeys: options.stores.verificationKeys,
+    });
+    await app.register(notificationFeedRoutes, {
+        prefix: "/v1/stores",
         verificationKeys: options.stores.verificationKeys,
     });
     app.addHook("onClose", async () => {

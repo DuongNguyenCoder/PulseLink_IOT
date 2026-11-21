@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { createAuthenticationHook } from "../auth/auth-hook.js";
-import { DeviceAuthorizationError, createDeviceForOwner, listDevicesForOwner, } from "./device.service.js";
+import { DeviceAuthorizationError, createDeviceForOwner, listDevicesForMember, } from "./device.service.js";
 import { isMacDerivedDeviceId } from "./device-identity.js";
 const storeParams = z.object({ storeId: z.string().min(1).max(128) });
 const createDeviceBody = z
@@ -35,7 +35,7 @@ export const deviceRoutes = async (app, options) => {
     });
     app.get("/:storeId/devices", async (request, reply) => {
         const params = parseParams(request);
-        const devices = await listDevicesForOwner(app.prisma, accountId(request), params.storeId);
+        const devices = await listDevicesForMember(app.prisma, accountId(request), params.storeId);
         return reply.send({ data: devices, meta: { requestId: request.id } });
     });
 };

@@ -37,6 +37,29 @@ async function requireOwner(db, accountId, storeId) {
     if (membership === null)
         throw new DeviceAuthorizationError("Resource not found", 404);
 }
+async function requireDeviceReader(db, accountId, storeId) {
+    const account = await db.account.findUnique({
+        where: { id: accountId },
+        select: { status: true, emailVerifiedAt: true },
+    });
+    if (account === null || account.status === "DISABLED")
+        throw new DeviceAuthorizationError("Authentication required", 401);
+    if (account.status !== "ACTIVE" || account.emailVerifiedAt === null) {
+        throw new DeviceAuthorizationError("Email verification required", 403);
+    }
+    const store = await db.store.findUnique({
+        where: { id: storeId },
+        select: { id: true, isActive: true },
+    });
+    if (store === null || !store.isActive)
+        throw new DeviceAuthorizationError("Resource not found", 404);
+    const membership = await db.storeMembership.findFirst({
+        where: { accountId, storeId, status: "ACTIVE", role: { in: ["OWNER", "STAFF"] } },
+        select: { accountId: true, storeId: true, role: true, status: true },
+    });
+    if (membership === null)
+        throw new DeviceAuthorizationError("Resource not found", 404);
+}
 export async function createDeviceForOwner(db, accountId, storeId, input, requestId) {
     if (!isMacDerivedDeviceId(input.deviceId)) {
         throw new DeviceAuthorizationError("Invalid MAC-derived Device ID", 400);
@@ -83,8 +106,8 @@ export async function createDeviceForOwner(db, accountId, storeId, input, reques
         throw error;
     }
 }
-export async function listDevicesForOwner(db, accountId, storeId) {
-    await requireOwner(db, accountId, storeId);
+export async function listDevicesForMember(db, accountId, storeId) {
+    await requireDeviceReader(db, accountId, storeId);
     return db.device.findMany({
         where: { storeId },
         orderBy: { createdAt: "asc" },
@@ -103,3 +126,5 @@ export async function listDevicesForOwner(db, accountId, storeId) {
         },
     }).then((devices) => devices.map(toDeviceMetadata));
 }
+/** @deprecated Keep the service name for integrations that still import it. */
+export const listDevicesForOwner = listDevicesForMember;

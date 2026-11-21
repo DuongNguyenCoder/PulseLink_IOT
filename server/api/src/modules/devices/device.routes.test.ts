@@ -5,7 +5,7 @@ import { issueAccessToken } from "../auth/jwt.js";
 import { deviceRoutes } from "./device.routes.js";
 
 describe("Device API credential boundary", () => {
-  it("does not expose deviceKey or deviceSecretHash in Store device metadata", async () => {
+  it("allows STAFF metadata reads without exposing device credentials", async () => {
     const { privateKey, publicKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
     const token = await issueAccessToken(
       { accountId: "account-1", authVersion: 0 },
@@ -20,7 +20,7 @@ describe("Device API credential boundary", () => {
       account: { findUnique: async () => ({ status: "ACTIVE", authVersion: 0, emailVerifiedAt: now }) },
       store: { findUnique: async () => ({ id: "store-1", isActive: true }) },
       storeMembership: {
-        findFirst: async () => ({ accountId: "account-1", storeId: "store-1", role: "OWNER", status: "ACTIVE" }),
+        findFirst: async () => ({ accountId: "account-1", storeId: "store-1", role: "STAFF", status: "ACTIVE" }),
       },
       device: {
         findMany: async () => [{
