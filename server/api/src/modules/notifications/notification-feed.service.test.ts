@@ -15,7 +15,7 @@ const event = {
   notifications: [{ status: "SENT" as const }],
 };
 
-function database(events = [event]): NotificationFeedDatabase {
+function database(events = [event], onFindMany?: (args: unknown) => void): NotificationFeedDatabase {
   return {
     account: { findUnique: async () => ({ status: "ACTIVE", emailVerifiedAt: new Date() }) },
     store: { findUnique: async () => ({ id: "store-1", isActive: true }) },
@@ -25,7 +25,7 @@ function database(events = [event]): NotificationFeedDatabase {
     device: { create: async () => { throw new Error("unused"); }, findMany: async () => [] },
     auditEvent: { create: async () => ({}) },
     $transaction: async () => { throw new Error("unused"); },
-    deviceEvent: { findMany: async () => events },
+    deviceEvent: { findMany: async (args) => { onFindMany?.(args); return events; } },
   };
 }
 
@@ -51,6 +51,22 @@ describe("notification feed", () => {
     expect(first.nextCursor).toBeTruthy();
     const result = await listNotificationFeed(database([event]), "account-1", "store-1", { cursor: first.nextCursor ?? undefined });
     expect(result.items).toHaveLength(1);
+  });
+
+  it("keeps a store event in the feed when this account has no push job", async () => {
+    let query: { where?: Record<string, unknown> } | undefined;
+    const result = await listNotificationFeed(
+      database([{ ...event, notifications: [] }], (args) => { query = args as typeof query; }),
+      "account-1",
+      "store-1",
+    );
+
+    expect(result.items[0]).toMatchObject({
+      eventId: event.eventId,
+      device: event.device,
+      status: "CANCELLED",
+    });
+    expect(query?.where).not.toHaveProperty("notifications");
   });
 
   it("rejects invalid cursors and inactive membership", async () => {

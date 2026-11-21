@@ -114,11 +114,6 @@ export async function listNotificationFeed(
   const events = await db.deviceEvent.findMany({
     where: {
       device: { storeId },
-      notifications: {
-        some: {
-          appInstallation: { accountId },
-        },
-      },
       ...(cursor === undefined
         ? {}
         : {
