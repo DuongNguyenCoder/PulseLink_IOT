@@ -13,11 +13,11 @@ const event = {
   id: "event-row-1",
   eventId: "0199aabb-ccdd-7eef-8123-456789abcdef",
   type: "BUTTON_PRESSED" as const,
+  status: "PROCESSED" as const,
   occurredAt: new Date("2026-11-21T10:00:00.000Z"),
   receivedAt: new Date("2026-11-21T10:00:01.000Z"),
   createdAt: new Date("2026-11-21T10:00:01.000Z"),
   device: { id: "pl-021122334455", name: "Bàn 1" },
-  notifications: [{ status: "SENT" as const }],
 };
 
 function build() {
@@ -37,7 +37,7 @@ describe("notification feed route", () => {
     const response = await app.inject({ method: "GET", url: "/v1/stores/store-1/notifications?limit=3" });
     expect(response.statusCode).toBe(200);
     expect(response.json().data.items[0]).toMatchObject({
-      id: event.id, eventId: event.eventId, status: "SENT", device: event.device,
+      id: event.id, eventId: event.eventId, status: "PROCESSED", device: event.device,
     });
     expect(response.json().data.items[0]).not.toHaveProperty("fcmToken");
     await app.close();

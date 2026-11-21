@@ -8,11 +8,11 @@ const event = {
   id: "event-row-2",
   eventId: "0199aabb-ccdd-7eef-8123-456789abcdee",
   type: "BUTTON_PRESSED" as const,
+  status: "PROCESSED" as const,
   occurredAt: new Date("2026-11-21T10:00:00.000Z"),
   receivedAt: new Date("2026-11-21T10:00:01.000Z"),
   createdAt: new Date("2026-11-21T10:00:01.000Z"),
   device: { id: "pl-021122334455", name: "Bàn 2" },
-  notifications: [{ status: "SENT" as const }],
 };
 
 function database(events = [event], onFindMany?: (args: unknown) => void): NotificationFeedDatabase {
@@ -36,7 +36,7 @@ describe("notification feed", () => {
       id: event.id,
       eventId: event.eventId,
       type: "BUTTON_PRESSED",
-      status: "SENT",
+      status: "PROCESSED",
       occurredAt: event.occurredAt,
       receivedAt: event.receivedAt,
       createdAt: event.createdAt,
@@ -53,10 +53,10 @@ describe("notification feed", () => {
     expect(result.items).toHaveLength(1);
   });
 
-  it("keeps a store event in the feed when this account has no push job", async () => {
+  it("returns all store events without querying app installations", async () => {
     let query: { where?: Record<string, unknown> } | undefined;
     const result = await listNotificationFeed(
-      database([{ ...event, notifications: [] }], (args) => { query = args as typeof query; }),
+      database([event], (args) => { query = args as typeof query; }),
       "account-1",
       "store-1",
     );
@@ -64,9 +64,10 @@ describe("notification feed", () => {
     expect(result.items[0]).toMatchObject({
       eventId: event.eventId,
       device: event.device,
-      status: "CANCELLED",
+      status: "PROCESSED",
     });
     expect(query?.where).not.toHaveProperty("notifications");
+    expect(query).toMatchObject({ orderBy: [{ receivedAt: "desc" }, { id: "desc" }] });
   });
 
   it("rejects invalid cursors and inactive membership", async () => {

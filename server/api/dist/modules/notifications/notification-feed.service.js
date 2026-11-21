@@ -6,8 +6,8 @@ export class NotificationFeedAuthorizationError extends Error {
         this.statusCode = statusCode;
     }
 }
-function encodeCursor(createdAt, id) {
-    return Buffer.from(`${createdAt.toISOString()}|${id}`, "utf8").toString("base64url");
+function encodeCursor(receivedAt, id) {
+    return Buffer.from(`${receivedAt.toISOString()}|${id}`, "utf8").toString("base64url");
 }
 function decodeCursor(cursor) {
     let decoded;
@@ -18,12 +18,12 @@ function decodeCursor(cursor) {
         throw new NotificationFeedAuthorizationError("Invalid cursor", 400);
     }
     const separator = decoded.indexOf("|");
-    const createdAt = new Date(decoded.slice(0, separator));
+    const receivedAt = new Date(decoded.slice(0, separator));
     const id = decoded.slice(separator + 1);
-    if (separator <= 0 || id.length === 0 || Number.isNaN(createdAt.getTime())) {
+    if (separator <= 0 || id.length === 0 || Number.isNaN(receivedAt.getTime())) {
         throw new NotificationFeedAuthorizationError("Invalid cursor", 400);
     }
-    return { createdAt, id };
+    return { receivedAt, id };
 }
 async function requireNotificationReader(db, accountId, storeId) {
     const account = await db.account.findUnique({
@@ -58,27 +58,21 @@ export async function listNotificationFeed(db, accountId, storeId, options = {})
                 ? {}
                 : {
                     OR: [
-                        { createdAt: { lt: cursor.createdAt } },
-                        { createdAt: cursor.createdAt, id: { lt: cursor.id } },
+                        { receivedAt: { lt: cursor.receivedAt } },
+                        { receivedAt: cursor.receivedAt, id: { lt: cursor.id } },
                     ],
                 }),
         },
-        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+        orderBy: [{ receivedAt: "desc" }, { id: "desc" }],
         take: limit + 1,
         select: {
             id: true,
             eventId: true,
             type: true,
+            status: true,
             occurredAt: true,
             receivedAt: true,
-            createdAt: true,
             device: { select: { id: true, name: true } },
-            notifications: {
-                where: { appInstallation: { accountId } },
-                orderBy: { createdAt: "desc" },
-                take: 1,
-                select: { status: true },
-            },
         },
     });
     const hasMore = events.length > limit;
@@ -86,16 +80,16 @@ export async function listNotificationFeed(db, accountId, storeId, options = {})
         id: event.id,
         eventId: event.eventId,
         type: event.type,
-        status: event.notifications[0]?.status ?? "CANCELLED",
+        status: event.status,
         occurredAt: event.occurredAt,
         receivedAt: event.receivedAt,
-        createdAt: event.createdAt,
+        createdAt: event.receivedAt,
         device: event.device,
     }));
     return {
         items: page,
         nextCursor: hasMore && page.length > 0
-            ? encodeCursor(page[page.length - 1].createdAt, page[page.length - 1].id)
+            ? encodeCursor(page[page.length - 1].receivedAt, page[page.length - 1].id)
             : null,
     };
 }
