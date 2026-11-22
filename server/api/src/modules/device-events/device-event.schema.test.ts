@@ -19,6 +19,7 @@ describe("device event request schema", () => {
     ["invalid UUID", { eventId: "not-a-uuid" }],
     ["unsupported type", { type: "UNKNOWN" }],
     ["invalid timestamp", { occurredAt: "yesterday" }],
+    ["Unix epoch timestamp", { occurredAt: "1970-01-01T00:00:00.000Z" }],
     ["firmware version too long", { firmwareVersion: "x".repeat(41) }],
     ["RSSI has the wrong type", { rssiDbm: "-60" }],
     ["RSSI is outside the supported range", { rssiDbm: -201 }],
