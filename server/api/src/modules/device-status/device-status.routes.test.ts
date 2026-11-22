@@ -21,12 +21,18 @@ function device(overrides: Record<string, unknown> = {}) {
 
 async function build(deviceValue: ReturnType<typeof device> | null) {
   const app = Fastify();
+  let current = deviceValue;
   const fakePrisma = {
     device: {
       findFirst: async (args: { where?: { deviceSecretHash?: string } }) =>
-        args.where?.deviceSecretHash === deviceValue?.deviceSecretHash
-          ? deviceValue
+        args.where?.deviceSecretHash === current?.deviceSecretHash
+          ? current
           : null,
+      update: async (args: { data: { status: string; lastSeenAt: Date } }) => {
+        if (current === null) throw new Error("device missing");
+        current = { ...current, ...args.data } as typeof current;
+        return current;
+      },
     },
   } as unknown as PrismaClient;
   app.decorate("prisma", fakePrisma);
@@ -47,7 +53,7 @@ describe("authenticated device status route", () => {
       data: {
         deviceId: "device-status-1",
         deviceKey: "device-key-1",
-        status: "OFFLINE",
+        status: "ONLINE",
         provisioningState: "PROVISIONED",
         enrollmentStatus: "ENROLLED",
       },
