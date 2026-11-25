@@ -9,6 +9,7 @@ import type {
   NotificationQueueSnapshot,
   NotificationJobRepository,
 } from "./notification-worker.js";
+import { DEFAULT_NOTIFICATION_SOUND_ID } from "./notification-sound.catalog.js";
 
 interface ClaimedRow {
   id: string;
@@ -17,6 +18,7 @@ interface ClaimedRow {
   fcmTokenCiphertext: string | null;
   fcmTokenFingerprint: string | null;
   eventType: string;
+  notificationSoundId: string;
   attempts: number;
   eventReceivedAt: Date;
   leaseRecovered: boolean;
@@ -89,10 +91,13 @@ export class PrismaNotificationJobRepository implements NotificationJobRepositor
         RETURNING n."id", n."eventId", n."appInstallationId", n."attempts"
       )
       SELECT c."id", c."eventId", c."appInstallationId",
-             ai."fcmTokenCiphertext", ai."fcmTokenFingerprint", e."type"::text AS "eventType",
+              ai."fcmTokenCiphertext", ai."fcmTokenFingerprint",
+              COALESCE(a."notificationSoundId", ${DEFAULT_NOTIFICATION_SOUND_ID}) AS "notificationSoundId",
+              e."type"::text AS "eventType",
              c."attempts", e."receivedAt" AS "eventReceivedAt", candidates."leaseRecovered"
       FROM claimed c JOIN candidates ON candidates."id" = c."id"
       LEFT JOIN "AppInstallation" ai ON ai."id" = c."appInstallationId"
+      JOIN "Account" a ON a."id" = ai."accountId"
       JOIN "DeviceEvent" e ON e."id" = c."eventId"`;
 
     const jobs: ClaimedNotificationJob[] = [];
@@ -109,6 +114,7 @@ export class PrismaNotificationJobRepository implements NotificationJobRepositor
           token: decryptFcmToken(row.fcmTokenCiphertext, this.fcmKeys),
           tokenFingerprint: row.fcmTokenFingerprint,
           eventType: row.eventType,
+          notificationSoundId: row.notificationSoundId,
           attempts: row.attempts,
           eventReceivedAt: row.eventReceivedAt,
           leaseRecovered: row.leaseRecovered,
@@ -126,9 +132,14 @@ export class PrismaNotificationJobRepository implements NotificationJobRepositor
     if (this.fcmKeys === undefined)
       return { eligible: false, reason: "fcm_keys_unavailable" };
     const rows = await this.db.$queryRaw<
-      Array<{ ciphertext: string | null; fingerprint: string | null }>
+      Array<{
+        ciphertext: string | null;
+        fingerprint: string | null;
+        notificationSoundId: string | null;
+      }>
     >`
-      SELECT ai."fcmTokenCiphertext" AS "ciphertext", ai."fcmTokenFingerprint" AS "fingerprint"
+      SELECT ai."fcmTokenCiphertext" AS "ciphertext", ai."fcmTokenFingerprint" AS "fingerprint",
+              a."notificationSoundId" AS "notificationSoundId"
       FROM "DeviceNotification" n JOIN "AppInstallation" ai ON ai."id" = n."appInstallationId"
       JOIN "Account" a ON a."id" = ai."accountId" JOIN "DeviceEvent" e ON e."id" = n."eventId"
       JOIN "Device" d ON d."id" = e."deviceId"
@@ -150,6 +161,8 @@ export class PrismaNotificationJobRepository implements NotificationJobRepositor
         eligible: true,
         token: decryptFcmToken(row.ciphertext, this.fcmKeys),
         tokenFingerprint: row.fingerprint,
+        notificationSoundId:
+          row.notificationSoundId ?? DEFAULT_NOTIFICATION_SOUND_ID,
       };
     } catch {
       return { eligible: false, reason: "invalid_fcm_token_material" };

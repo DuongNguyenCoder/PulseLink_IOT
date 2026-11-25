@@ -188,6 +188,7 @@ model Account {
   status          AccountStatus @default(PENDING)
   emailVerifiedAt DateTime?
   authVersion     Int           @default(0)
+  notificationSoundId String     @default("sound_notification_1") @db.VarChar(80)
   disabledAt      DateTime?
   createdAt       DateTime      @default(now())
   updatedAt       DateTime      @updatedAt

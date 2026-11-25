@@ -120,6 +120,7 @@ export const AccountScalarFieldEnum = {
     status: 'status',
     emailVerifiedAt: 'emailVerifiedAt',
     authVersion: 'authVersion',
+    notificationSoundId: 'notificationSoundId',
     disabledAt: 'disabledAt',
     createdAt: 'createdAt',
     updatedAt: 'updatedAt'

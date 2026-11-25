@@ -17,6 +17,7 @@ const job: ClaimedNotificationJob = {
   token: "opaque-test-token",
   tokenFingerprint: null,
   eventType: "BUTTON_PRESSED",
+  notificationSoundId: "sound_notification_1",
   attempts: 1,
 };
 
@@ -50,17 +51,19 @@ class FakeRepository implements NotificationJobRepository {
   async markFailed(id: string, reason: string): Promise<void> {
     this.failed.push({ id, reason });
   }
-
 }
 
 class FakeSender implements FcmSender {
   constructor(private readonly error?: Error) {}
-  messages: Array<{ token: string; data: Record<string, string> }> = [];
-
-  async send(message: {
+  messages: Array<{
     token: string;
     data: Record<string, string>;
-  }): Promise<string> {
+    notification?: { title: string; body: string };
+    android?: { notification?: { sound?: string } };
+    apns?: { payload?: { aps?: { sound?: string } } };
+  }> = [];
+
+  async send(message: Parameters<FcmSender["send"]>[0]): Promise<string> {
     this.messages.push(message);
     if (this.error) throw this.error;
     return "fcm-message-1";
@@ -79,7 +82,19 @@ describe("notification worker", () => {
     expect(sender.messages).toEqual([
       {
         token: "opaque-test-token",
-        data: { eventId: "event-1", eventType: "BUTTON_PRESSED" },
+        data: {
+          eventId: "event-1",
+          eventType: "BUTTON_PRESSED",
+          soundId: "sound_notification_1",
+          title: "PulseLink",
+          body: "Có yêu cầu phục vụ mới",
+        },
+        notification: {
+          title: "PulseLink",
+          body: "Có yêu cầu phục vụ mới",
+        },
+        android: { notification: { sound: "sound_notification_1" } },
+        apns: { payload: { aps: { sound: "sound_notification_1.mp3" } } },
       },
     ]);
     expect(repository.sent).toEqual([
@@ -90,6 +105,27 @@ describe("notification worker", () => {
       sent: 1,
       retried: 0,
       failed: 0,
+    });
+  });
+
+  it("uses the current Account sound selection when revalidating a job", async () => {
+    const repository = new FakeRepository();
+    repository.revalidate = async () => ({
+      eligible: true,
+      token: "opaque-test-token",
+      tokenFingerprint: null,
+      notificationSoundId: "sound_notification_3",
+    });
+    const sender = new FakeSender();
+    const worker = new NotificationWorker(repository, sender);
+
+    await worker.processOnce();
+
+    expect(sender.messages[0]?.android).toEqual({
+      notification: { sound: "sound_notification_3" },
+    });
+    expect(sender.messages[0]?.apns).toEqual({
+      payload: { aps: { sound: "sound_notification_3.mp3" } },
     });
   });
 
@@ -151,10 +187,7 @@ describe("notification worker", () => {
 
   it("contains provider failures so another claimed job can complete", async () => {
     const repository = new FakeRepository();
-    repository.claimed = [
-      job,
-      { ...job, id: "notification-2" },
-    ];
+    repository.claimed = [job, { ...job, id: "notification-2" }];
     let calls = 0;
     const sender: FcmSender = {
       send: async () => {

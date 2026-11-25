@@ -4,6 +4,22 @@ import { getMessaging, type Messaging } from "firebase-admin/messaging";
 export interface FcmMessage {
   token: string;
   data: Record<string, string>;
+  notification?: {
+    title: string;
+    body: string;
+  };
+  android?: {
+    notification?: {
+      sound?: string;
+    };
+  };
+  apns?: {
+    payload?: {
+      aps: {
+        sound?: string;
+      };
+    };
+  };
 }
 
 export interface FcmSender {
@@ -64,6 +80,11 @@ export class FirebaseAdminSender implements FcmSender {
       return await this.messaging.send({
         token: message.token,
         data: message.data,
+        ...(message.notification === undefined
+          ? {}
+          : { notification: message.notification }),
+        ...(message.android === undefined ? {} : { android: message.android }),
+        ...(message.apns === undefined ? {} : { apns: message.apns }),
       });
     } catch (error: unknown) {
       throw classifyFcmError(error);

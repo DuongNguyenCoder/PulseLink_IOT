@@ -1,4 +1,5 @@
 import { InvalidFcmTokenError, PermanentFcmError, TransientFcmError, } from "./fcm.client.js";
+import { getNotificationSound } from "./notification-sound.catalog.js";
 const defaultLogger = {
     info: () => undefined,
     warn: () => undefined,
@@ -90,11 +91,25 @@ export class NotificationWorker {
             }
             const token = eligibility?.token ?? job.token;
             tokenFingerprint = eligibility?.tokenFingerprint ?? job.tokenFingerprint;
+            const sound = getNotificationSound(eligibility?.notificationSoundId ?? job.notificationSoundId);
             const messageId = await this.sender.send({
                 token,
                 data: {
                     eventId: job.eventId,
                     eventType: job.eventType,
+                    soundId: sound.id,
+                    title: "PulseLink",
+                    body: "Có yêu cầu phục vụ mới",
+                },
+                notification: {
+                    title: "PulseLink",
+                    body: "Có yêu cầu phục vụ mới",
+                },
+                android: {
+                    notification: { sound: sound.androidResourceName },
+                },
+                apns: {
+                    payload: { aps: { sound: sound.iosResourceName } },
                 },
             });
             await this.repository.markSent(job.id, messageId, this.options.now());

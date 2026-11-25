@@ -48,6 +48,11 @@ export class FirebaseAdminSender {
             return await this.messaging.send({
                 token: message.token,
                 data: message.data,
+                ...(message.notification === undefined
+                    ? {}
+                    : { notification: message.notification }),
+                ...(message.android === undefined ? {} : { android: message.android }),
+                ...(message.apns === undefined ? {} : { apns: message.apns }),
             });
         }
         catch (error) {
