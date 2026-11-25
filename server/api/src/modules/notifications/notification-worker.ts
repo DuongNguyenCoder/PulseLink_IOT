@@ -238,6 +238,7 @@ export class NotificationWorker {
           eventId: job.eventId,
           eventType: job.eventType,
           soundId: sound.id,
+          channelId: sound.androidChannelId,
           title: "PulseLink",
           body: "Có yêu cầu phục vụ mới",
         },
@@ -246,7 +247,10 @@ export class NotificationWorker {
           body: "Có yêu cầu phục vụ mới",
         },
         android: {
-          notification: { sound: sound.androidResourceName },
+          notification: {
+            sound: sound.androidResourceName,
+            channelId: sound.androidChannelId,
+          },
         },
         apns: {
           payload: { aps: { sound: sound.iosResourceName } },

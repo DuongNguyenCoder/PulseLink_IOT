@@ -11,6 +11,7 @@ export interface FcmMessage {
   android?: {
     notification?: {
       sound?: string;
+      channelId?: string;
     };
   };
   apns?: {

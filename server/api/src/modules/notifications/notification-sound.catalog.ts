@@ -5,6 +5,7 @@ export interface NotificationSoundDefinition {
   name: string;
   fileName: string;
   androidResourceName: string;
+  androidChannelId: string;
   iosResourceName: string;
 }
 
@@ -16,6 +17,7 @@ export const NOTIFICATION_SOUNDS: readonly NotificationSoundDefinition[] = [
     name: "Chuông 1",
     fileName: "sound_notification_1.mp3",
     androidResourceName: "sound_notification_1",
+    androidChannelId: "pulselink_service_calls_sound_notification_1",
     iosResourceName: "sound_notification_1.mp3",
   },
   {
@@ -23,6 +25,7 @@ export const NOTIFICATION_SOUNDS: readonly NotificationSoundDefinition[] = [
     name: "Chuông 2",
     fileName: "sound_notification_2.mp3",
     androidResourceName: "sound_notification_2",
+    androidChannelId: "pulselink_service_calls_sound_notification_2",
     iosResourceName: "sound_notification_2.mp3",
   },
   {
@@ -30,6 +33,7 @@ export const NOTIFICATION_SOUNDS: readonly NotificationSoundDefinition[] = [
     name: "Chuông 3",
     fileName: "sound_notification_3.mp3",
     androidResourceName: "sound_notification_3",
+    androidChannelId: "pulselink_service_calls_sound_notification_3",
     iosResourceName: "sound_notification_3.mp3",
   },
 ] as const;

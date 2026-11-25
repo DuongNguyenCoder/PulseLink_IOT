@@ -59,7 +59,7 @@ class FakeSender implements FcmSender {
     token: string;
     data: Record<string, string>;
     notification?: { title: string; body: string };
-    android?: { notification?: { sound?: string } };
+    android?: { notification?: { sound?: string; channelId?: string } };
     apns?: { payload?: { aps?: { sound?: string } } };
   }> = [];
 
@@ -86,6 +86,7 @@ describe("notification worker", () => {
           eventId: "event-1",
           eventType: "BUTTON_PRESSED",
           soundId: "sound_notification_1",
+          channelId: "pulselink_service_calls_sound_notification_1",
           title: "PulseLink",
           body: "Có yêu cầu phục vụ mới",
         },
@@ -93,7 +94,12 @@ describe("notification worker", () => {
           title: "PulseLink",
           body: "Có yêu cầu phục vụ mới",
         },
-        android: { notification: { sound: "sound_notification_1" } },
+        android: {
+          notification: {
+            sound: "sound_notification_1",
+            channelId: "pulselink_service_calls_sound_notification_1",
+          },
+        },
         apns: { payload: { aps: { sound: "sound_notification_1.mp3" } } },
       },
     ]);
@@ -122,7 +128,10 @@ describe("notification worker", () => {
     await worker.processOnce();
 
     expect(sender.messages[0]?.android).toEqual({
-      notification: { sound: "sound_notification_3" },
+      notification: {
+        sound: "sound_notification_3",
+        channelId: "pulselink_service_calls_sound_notification_3",
+      },
     });
     expect(sender.messages[0]?.apns).toEqual({
       payload: { aps: { sound: "sound_notification_3.mp3" } },
