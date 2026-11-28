@@ -175,6 +175,7 @@ export const StoreInvitationScalarFieldEnum = {
     role: 'role',
     expiresAt: 'expiresAt',
     acceptedAt: 'acceptedAt',
+    declinedAt: 'declinedAt',
     revokedAt: 'revokedAt',
     createdAt: 'createdAt',
     updatedAt: 'updatedAt'

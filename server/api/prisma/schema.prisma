@@ -99,6 +99,7 @@ enum MembershipStatus {
 enum StoreInvitationStatus {
   PENDING
   ACCEPTED
+  DECLINED
   EXPIRED
   REVOKED
 }
@@ -304,6 +305,7 @@ model StoreInvitation {
   role                  MembershipRole        @default(STAFF)
   expiresAt             DateTime
   acceptedAt            DateTime?
+  declinedAt            DateTime?
   revokedAt             DateTime?
   createdAt             DateTime               @default(now())
   updatedAt             DateTime               @updatedAt

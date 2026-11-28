@@ -77,6 +77,7 @@ export const MembershipStatus = {
 export const StoreInvitationStatus = {
     PENDING: 'PENDING',
     ACCEPTED: 'ACCEPTED',
+    DECLINED: 'DECLINED',
     EXPIRED: 'EXPIRED',
     REVOKED: 'REVOKED'
 };

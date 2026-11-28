@@ -46,4 +46,17 @@ describe("invitation routes", () => {
     expect(response.json().error.code).toBe("UNAUTHENTICATED");
     await app.close();
   });
+
+  it.each([
+    ["GET", "/account/invitations"],
+    ["POST", "/account/invitations/invitation-1/accept"],
+    ["POST", "/account/invitations/invitation-1/decline"],
+  ])("protects the Account invitation endpoint %s %s", async (method, url) => {
+    const app = appWithDatabase();
+    await app.register(invitationRoutes, { verificationKeys: new Map() });
+    const response = await app.inject({ method: method as "GET" | "POST", url });
+    expect(response.statusCode).toBe(401);
+    expect(response.json().error.code).toBe("UNAUTHENTICATED");
+    await app.close();
+  });
 });

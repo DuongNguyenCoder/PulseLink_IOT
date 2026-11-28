@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { acceptInvitation, createInvitation, inspectInvitation, type InvitationDatabase, type InvitationRecord } from "./invitation.service.js";
+import { acceptInvitation, acceptInvitationById, createInvitation, declineInvitation, inspectInvitation, listAccountInvitations, type InvitationDatabase, type InvitationRecord } from "./invitation.service.js";
 
 const now = new Date("2026-11-08T00:00:00.000Z");
 
@@ -14,6 +14,7 @@ function record(overrides: Partial<InvitationRecord> = {}): InvitationRecord {
     role: "STAFF",
     expiresAt: new Date("2026-11-15T00:00:00.000Z"),
     acceptedAt: null,
+    declinedAt: null,
     revokedAt: null,
     createdAt: now,
     updatedAt: now,
@@ -125,5 +126,36 @@ describe("Store invitation service", () => {
     const result = await acceptInvitation(db, "staff-1", "A".repeat(43), undefined, now);
     expect(result.membership.status).toBe("ACTIVE");
     expect(db.storeMembership.create).not.toHaveBeenCalled();
+  });
+
+  it("lists only pending invitations for the authenticated Account without recipient identity", async () => {
+    const db = database();
+    const result = await listAccountInvitations(db, "staff-1", now);
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({ id: "invitation-1", storeId: "store-1", role: "STAFF", status: "PENDING", store: { name: "Cafe" } });
+    expect(result[0]).not.toHaveProperty("recipientEmailNormalized");
+    expect(result[0]).not.toHaveProperty("tokenHash");
+  });
+
+  it("accepts from the authenticated invitation inbox by ID", async () => {
+    const db = database();
+    const result = await acceptInvitationById(db, "staff-1", "invitation-1", "request-1", now);
+    expect(result.membership).toMatchObject({ accountId: "staff-1", storeId: "store-1", role: "STAFF", status: "ACTIVE" });
+    expect(db.storeInvitation.updateMany).toHaveBeenCalledWith(expect.objectContaining({ where: expect.objectContaining({ id: "invitation-1" }), data: expect.objectContaining({ status: "ACCEPTED" }) }));
+  });
+
+  it("declines an invitation without creating a membership and records an audit event", async () => {
+    const db = database();
+    const result = await declineInvitation(db, "staff-1", "invitation-1", "request-1", now);
+    expect(result).toMatchObject({ id: "invitation-1", status: "DECLINED", declinedAt: now });
+    expect(db.storeMembership.create).not.toHaveBeenCalled();
+    expect(db.auditEvent.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ action: "STORE_INVITATION_DECLINED" }) }));
+  });
+
+  it("does not allow another Account to accept or decline by invitation ID", async () => {
+    const db = database({ account: { findUnique: vi.fn(async () => ({ id: "other", emailNormalized: "other@example.com", status: "ACTIVE" as const })) } });
+    await expect(acceptInvitationById(db, "other", "invitation-1", undefined, now)).rejects.toMatchObject({ statusCode: 403 });
+    await expect(declineInvitation(db, "other", "invitation-1", undefined, now)).rejects.toMatchObject({ statusCode: 404 });
+    expect(db.storeInvitation.updateMany).not.toHaveBeenCalled();
   });
 });

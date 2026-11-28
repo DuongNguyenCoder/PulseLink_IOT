@@ -2,11 +2,11 @@ import type { FastifyPluginAsync } from "fastify";
 import type { KeyInput } from "jose";
 import { z } from "zod";
 import { createAuthenticationHook } from "../auth/auth-hook.js";
-import { acceptInvitation, createInvitation, getInvitation, inspectInvitation, InvitationError, listInvitations, resendInvitation, revokeInvitation, type InvitationStatus } from "./invitation.service.js";
+import { acceptInvitation, acceptInvitationById, createInvitation, declineInvitation, getInvitation, inspectInvitation, InvitationError, listAccountInvitations, listInvitations, resendInvitation, revokeInvitation, type InvitationStatus } from "./invitation.service.js";
 
 const storeParams = z.object({ storeId: z.string().min(1).max(128) });
 const invitationParams = z.object({ storeId: z.string().min(1).max(128), invitationId: z.string().min(1).max(128) });
-const statusQuery = z.object({ status: z.enum(["PENDING", "ACCEPTED", "EXPIRED", "REVOKED"]).optional(), page: z.coerce.number().int().min(1).max(10_000).default(1), limit: z.coerce.number().int().min(1).max(100).default(50) });
+const statusQuery = z.object({ status: z.enum(["PENDING", "ACCEPTED", "DECLINED", "EXPIRED", "REVOKED"]).optional(), page: z.coerce.number().int().min(1).max(10_000).default(1), limit: z.coerce.number().int().min(1).max(100).default(50) });
 const createBody = z.object({ email: z.string().email().max(254), role: z.literal("STAFF").optional() }).strict();
 const tokenBody = z.object({ token: z.string().regex(/^[A-Za-z0-9_-]{43}$/) }).strict();
 
@@ -67,6 +67,23 @@ export const invitationRoutes: FastifyPluginAsync<InvitationRouteOptions> = asyn
     protectedApp.post("/invitations/accept", async (request, reply) => {
       const body = parse(tokenBody.safeParse(request.body));
       const data = await acceptInvitation(app.prisma as never, currentAccountId(request), body.token, request.id);
+      return reply.send({ data, meta: { requestId: request.id } });
+    });
+
+    protectedApp.get("/account/invitations", async (request, reply) => {
+      const data = await listAccountInvitations(app.prisma as never, currentAccountId(request));
+      return reply.send({ data, meta: { requestId: request.id } });
+    });
+
+    protectedApp.post("/account/invitations/:invitationId/accept", async (request, reply) => {
+      const params = parse(z.object({ invitationId: z.string().min(1).max(128) }).safeParse(request.params));
+      const data = await acceptInvitationById(app.prisma as never, currentAccountId(request), params.invitationId, request.id);
+      return reply.send({ data, meta: { requestId: request.id } });
+    });
+
+    protectedApp.post("/account/invitations/:invitationId/decline", async (request, reply) => {
+      const params = parse(z.object({ invitationId: z.string().min(1).max(128) }).safeParse(request.params));
+      const data = await declineInvitation(app.prisma as never, currentAccountId(request), params.invitationId, request.id);
       return reply.send({ data, meta: { requestId: request.id } });
     });
   });

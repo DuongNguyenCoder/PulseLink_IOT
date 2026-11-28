@@ -29,6 +29,20 @@ function publicInvitation(record) {
 function effectiveStatus(record, now) {
     return record.status === "PENDING" && record.expiresAt <= now ? "EXPIRED" : record.status;
 }
+function accountInvitation(record, now) {
+    return {
+        id: record.id,
+        storeId: record.storeId,
+        role: record.role,
+        status: effectiveStatus(record, now),
+        expiresAt: record.expiresAt,
+        acceptedAt: record.acceptedAt,
+        declinedAt: record.declinedAt,
+        revokedAt: record.revokedAt,
+        createdAt: record.createdAt,
+        store: record.store,
+    };
+}
 async function requireOwner(db, accountId, storeId) {
     const store = await db.store.findUnique({ where: { id: storeId }, select: { id: true, name: true, slug: true, isActive: true } });
     if (store === null || !store.isActive)
@@ -88,15 +102,17 @@ export async function inspectInvitation(db, token, now = new Date()) {
         throw new InvitationError("Invalid invitation", 404);
     return { id: invitation.id, store: invitation.store, role: invitation.role, status: effectiveStatus(invitation, now), expiresAt: invitation.expiresAt, createdAt: invitation.createdAt };
 }
-export async function acceptInvitation(db, accountId, token, requestId, now = new Date()) {
-    if (!/^[A-Za-z0-9_-]{43}$/.test(token))
-        throw new InvitationError("Invalid invitation", 404);
-    const tokenHash = hashToken(token);
+async function requireActiveAccount(db, accountId) {
     const account = await db.account.findUnique({ where: { id: accountId }, select: { id: true, emailNormalized: true, status: true } });
     if (account === null || account.status !== "ACTIVE")
         throw new InvitationError("Authentication required", 401);
+    return account;
+}
+async function acceptInvitationByLookup(db, accountId, lookup, requestId, now = new Date()) {
+    const account = await requireActiveAccount(db, accountId);
     return db.$transaction(async (tx) => {
-        const invitation = await tx.storeInvitation.findUnique({ where: { tokenHash }, select: { id: true, storeId: true, inviterAccountId: true, recipientEmailNormalized: true, tokenHash: true, status: true, role: true, expiresAt: true, acceptedAt: true, revokedAt: true, createdAt: true, updatedAt: true, store: { select: { id: true, name: true, slug: true } } } });
+        const where = lookup.tokenHash ? { tokenHash: lookup.tokenHash } : { id: lookup.invitationId };
+        const invitation = await tx.storeInvitation.findUnique({ where, select: { id: true, storeId: true, inviterAccountId: true, recipientEmailNormalized: true, tokenHash: true, status: true, role: true, expiresAt: true, acceptedAt: true, declinedAt: true, revokedAt: true, createdAt: true, updatedAt: true, store: { select: { id: true, name: true, slug: true } } } });
         if (invitation === null)
             throw new InvitationError("Invalid invitation", 404);
         if (invitation.recipientEmailNormalized !== account.emailNormalized)
@@ -107,13 +123,18 @@ export async function acceptInvitation(db, accountId, token, requestId, now = ne
                 return { invitation: publicInvitation(invitation), membership };
             throw new InvitationError("Invitation has already been accepted", 409);
         }
+        if (invitation.status === "DECLINED")
+            throw new InvitationError("Invitation has been declined", 409);
         if (invitation.status === "REVOKED")
             throw new InvitationError("Invitation has been revoked", 409);
         if (invitation.status === "EXPIRED" || invitation.expiresAt <= now) {
             await tx.storeInvitation.updateMany({ where: { id: invitation.id, status: "PENDING" }, data: { status: "EXPIRED" } });
             throw new InvitationError("Invitation has expired", 409);
         }
-        const consumed = await tx.storeInvitation.updateMany({ where: { id: invitation.id, tokenHash, status: "PENDING", expiresAt: { gt: now }, revokedAt: null }, data: { status: "ACCEPTED", acceptedAt: now } });
+        const consumed = await tx.storeInvitation.updateMany({
+            where: { id: invitation.id, ...(lookup.tokenHash ? { tokenHash: lookup.tokenHash } : {}), status: "PENDING", expiresAt: { gt: now }, revokedAt: null },
+            data: { status: "ACCEPTED", acceptedAt: now },
+        });
         if (consumed.count !== 1)
             throw new InvitationError("Invitation is no longer active", 409);
         const existing = await tx.storeMembership.findUnique({ where: { accountId_storeId: { accountId, storeId: invitation.storeId } }, select: { id: true, accountId: true, storeId: true, role: true, status: true } });
@@ -134,6 +155,50 @@ export async function acceptInvitation(db, accountId, token, requestId, now = ne
         });
         return { invitation: publicInvitation({ ...invitation, status: "ACCEPTED", acceptedAt: now }), membership };
     });
+}
+export async function acceptInvitation(db, accountId, token, requestId, now = new Date()) {
+    if (!/^[A-Za-z0-9_-]{43}$/.test(token))
+        throw new InvitationError("Invalid invitation", 404);
+    return acceptInvitationByLookup(db, accountId, { tokenHash: hashToken(token) }, requestId, now);
+}
+export async function acceptInvitationById(db, accountId, invitationId, requestId, now = new Date()) {
+    return acceptInvitationByLookup(db, accountId, { invitationId }, requestId, now);
+}
+export async function declineInvitation(db, accountId, invitationId, requestId, now = new Date()) {
+    const account = await requireActiveAccount(db, accountId);
+    return db.$transaction(async (tx) => {
+        const invitation = await tx.storeInvitation.findUnique({ where: { id: invitationId }, select: { id: true, storeId: true, inviterAccountId: true, recipientEmailNormalized: true, tokenHash: true, status: true, role: true, expiresAt: true, acceptedAt: true, declinedAt: true, revokedAt: true, createdAt: true, updatedAt: true, store: { select: { id: true, name: true, slug: true } } } });
+        if (invitation === null || invitation.recipientEmailNormalized !== account.emailNormalized)
+            throw new InvitationError("Resource not found", 404);
+        if (invitation.status === "DECLINED")
+            return accountInvitation(invitation, now);
+        if (invitation.status === "ACCEPTED")
+            throw new InvitationError("Invitation has already been accepted", 409);
+        if (invitation.status === "REVOKED")
+            throw new InvitationError("Invitation has been revoked", 409);
+        if (invitation.status === "EXPIRED" || invitation.expiresAt <= now) {
+            await tx.storeInvitation.updateMany({ where: { id: invitation.id, status: "PENDING" }, data: { status: "EXPIRED" } });
+            throw new InvitationError("Invitation has expired", 409);
+        }
+        const declined = await tx.storeInvitation.updateMany({ where: { id: invitation.id, status: "PENDING", expiresAt: { gt: now }, revokedAt: null }, data: { status: "DECLINED", declinedAt: now } });
+        if (declined.count !== 1)
+            throw new InvitationError("Invitation is no longer active", 409);
+        await writeAuditEvent(tx, {
+            actorType: "ACCOUNT", actorId: accountId, action: "STORE_INVITATION_DECLINED",
+            resourceType: "STORE_INVITATION", resourceId: invitation.id, storeId: invitation.storeId, requestId,
+            metadata: { role: "STAFF", status: "DECLINED", outcome: "success" }, occurredAt: now,
+        });
+        return accountInvitation({ ...invitation, status: "DECLINED", declinedAt: now }, now);
+    });
+}
+export async function listAccountInvitations(db, accountId, now = new Date()) {
+    const account = await requireActiveAccount(db, accountId);
+    const invitations = await db.storeInvitation.findMany({
+        where: { recipientEmailNormalized: account.emailNormalized, status: "PENDING", expiresAt: { gt: now } },
+        orderBy: { createdAt: "desc" },
+        select: { id: true, storeId: true, inviterAccountId: true, recipientEmailNormalized: true, tokenHash: true, status: true, role: true, expiresAt: true, acceptedAt: true, declinedAt: true, revokedAt: true, createdAt: true, updatedAt: true, store: { select: { id: true, name: true, slug: true } } },
+    });
+    return invitations.map((invitation) => accountInvitation(invitation, now));
 }
 export async function listInvitations(db, accountId, storeId, status, page = 1, limit = 50, now = new Date()) {
     await requireOwner(db, accountId, storeId);
@@ -157,6 +222,7 @@ export async function listInvitations(db, accountId, storeId, status, page = 1, 
                 role: true,
                 expiresAt: true,
                 acceptedAt: true,
+                declinedAt: true,
                 revokedAt: true,
                 createdAt: true,
                 updatedAt: true,
@@ -171,7 +237,7 @@ export async function getInvitation(db, accountId, storeId, invitationId) {
     await requireOwner(db, accountId, storeId);
     const invitation = await db.storeInvitation.findUnique({
         where: { id: invitationId },
-        select: { id: true, storeId: true, inviterAccountId: true, recipientEmailNormalized: true, status: true, role: true, expiresAt: true, acceptedAt: true, revokedAt: true, createdAt: true, updatedAt: true, inviter: { select: { id: true, emailNormalized: true } } },
+        select: { id: true, storeId: true, inviterAccountId: true, recipientEmailNormalized: true, status: true, role: true, expiresAt: true, acceptedAt: true, declinedAt: true, revokedAt: true, createdAt: true, updatedAt: true, inviter: { select: { id: true, emailNormalized: true } } },
     });
     if (invitation === null || invitation.storeId !== storeId)
         throw new InvitationError("Resource not found", 404);
@@ -205,7 +271,7 @@ export async function resendInvitation(db, accountId, storeId, invitationId, req
             throw new InvitationError("Resource not found", 404);
         if (current.status === "ACCEPTED" || current.status === "REVOKED")
             throw new InvitationError("Invitation cannot be resent in its current state", 409);
-        const updated = await tx.storeInvitation.updateMany({ where: { id: invitationId, storeId, tokenHash: current.tokenHash, status: { in: ["PENDING", "EXPIRED"] } }, data: { tokenHash: generated.tokenHash, status: "PENDING", expiresAt: new Date(now.getTime() + DEFAULT_EXPIRATION_MS), acceptedAt: null, revokedAt: null } });
+        const updated = await tx.storeInvitation.updateMany({ where: { id: invitationId, storeId, tokenHash: current.tokenHash, status: { in: ["PENDING", "DECLINED", "EXPIRED"] } }, data: { tokenHash: generated.tokenHash, status: "PENDING", expiresAt: new Date(now.getTime() + DEFAULT_EXPIRATION_MS), acceptedAt: null, declinedAt: null, revokedAt: null } });
         if (updated.count !== 1)
             throw new InvitationError("Invitation changed concurrently; retry the request", 409);
         const invitation = await tx.storeInvitation.findUnique({ where: { id: invitationId }, include: { inviter: { select: { id: true, emailNormalized: true } } } });
