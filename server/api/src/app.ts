@@ -66,8 +66,13 @@ export async function buildApp(options: BuildAppOptions) {
   });
 
   app.setErrorHandler((error: unknown, request, reply) => {
-    request.log.error(getSafeErrorLogFields(error), "Unhandled request error");
     const mapped = mapErrorToApiResponse(error, request.id);
+    const safeFields = getSafeErrorLogFields(error);
+    if (mapped.statusCode >= 500) {
+      request.log.error(safeFields, "Unhandled request error");
+    } else {
+      request.log.warn(safeFields, "Request rejected");
+    }
     return reply.code(mapped.statusCode).send(mapped.response);
   });
 

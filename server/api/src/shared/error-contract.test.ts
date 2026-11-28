@@ -68,4 +68,22 @@ describe("API error contract", () => {
       },
     });
   });
+
+  it("returns an actionable safe message for a duplicate pending invitation", () => {
+    const mapped = mapErrorToApiResponse(
+      { statusCode: 409, apiReason: "INVITATION_ALREADY_PENDING" },
+      "request-invitation-duplicate",
+    );
+
+    expect(mapped).toEqual({
+      statusCode: 409,
+      response: {
+        error: {
+          code: "CONFLICT",
+          message: "An invitation is already pending for this email. Use Resend or wait until it expires.",
+          requestId: "request-invitation-duplicate",
+        },
+      },
+    });
+  });
 });

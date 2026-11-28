@@ -5,10 +5,12 @@ import { requireStoreMembership } from "../stores/store.service.js";
 import { writeAuditEvent } from "../../shared/audit.js";
 export class InvitationError extends Error {
     statusCode;
-    constructor(message, statusCode) {
+    apiReason;
+    constructor(message, statusCode, apiReason) {
         super(message);
         this.name = "InvitationError";
         this.statusCode = statusCode;
+        this.apiReason = apiReason;
     }
 }
 const DEFAULT_EXPIRATION_MS = 7 * 24 * 60 * 60 * 1000;
@@ -62,7 +64,7 @@ export async function createInvitation(db, accountId, storeId, input, requestId,
     }
     const existingPending = await db.storeInvitation.findFirst({ where: { storeId, recipientEmailNormalized: email, status: "PENDING" }, select: { id: true } });
     if (existingPending !== null)
-        throw new InvitationError("A pending invitation already exists", 409);
+        throw new InvitationError("A pending invitation already exists", 409, "INVITATION_ALREADY_PENDING");
     const { token, tokenHash } = newToken();
     try {
         const invitation = await db.$transaction(async (tx) => {
@@ -90,7 +92,7 @@ export async function createInvitation(db, accountId, storeId, input, requestId,
     }
     catch (error) {
         if (isUniqueViolation(error))
-            throw new InvitationError("A pending invitation already exists", 409);
+            throw new InvitationError("A pending invitation already exists", 409, "INVITATION_ALREADY_PENDING");
         throw error;
     }
 }

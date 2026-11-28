@@ -51,7 +51,9 @@ export function mapErrorToApiResponse(error, requestId) {
             case 409:
                 return {
                     code: "CONFLICT",
-                    message: "Request conflicts with current state",
+                    message: errorLike.apiReason === "INVITATION_ALREADY_PENDING"
+                        ? "An invitation is already pending for this email. Use Resend or wait until it expires."
+                        : "Request conflicts with current state",
                 };
             case 413:
                 return {

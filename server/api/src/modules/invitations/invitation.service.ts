@@ -66,11 +66,13 @@ export interface InvitationDatabase {
 
 export class InvitationError extends Error {
   readonly statusCode: 400 | 401 | 403 | 404 | 409;
+  readonly apiReason?: "INVITATION_ALREADY_PENDING";
 
-  constructor(message: string, statusCode: 400 | 401 | 403 | 404 | 409) {
+  constructor(message: string, statusCode: 400 | 401 | 403 | 404 | 409, apiReason?: "INVITATION_ALREADY_PENDING") {
     super(message);
     this.name = "InvitationError";
     this.statusCode = statusCode;
+    this.apiReason = apiReason;
   }
 }
 
@@ -138,7 +140,7 @@ export async function createInvitation(
   }
 
   const existingPending = await db.storeInvitation.findFirst({ where: { storeId, recipientEmailNormalized: email, status: "PENDING" }, select: { id: true } });
-  if (existingPending !== null) throw new InvitationError("A pending invitation already exists", 409);
+  if (existingPending !== null) throw new InvitationError("A pending invitation already exists", 409, "INVITATION_ALREADY_PENDING");
 
   const { token, tokenHash } = newToken();
   try {
@@ -165,7 +167,7 @@ export async function createInvitation(
     });
     return { invitation: publicInvitation(invitation), token };
   } catch (error: unknown) {
-    if (isUniqueViolation(error)) throw new InvitationError("A pending invitation already exists", 409);
+    if (isUniqueViolation(error)) throw new InvitationError("A pending invitation already exists", 409, "INVITATION_ALREADY_PENDING");
     throw error;
   }
 }
